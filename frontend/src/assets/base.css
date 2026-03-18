@@ -1,0 +1,26 @@
+:root {
+  --bg: #0c1520;
+  --panel: rgba(17, 28, 40, 0.82);
+  --line: rgba(255, 255, 255, 0.14);
+  --text: #e8f1ff;
+  --muted: #9fb5ca;
+  --accent: #ffb366;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  margin: 0;
+  min-height: 100%;
+  color: var(--text);
+  font-family: "Segoe UI", "Noto Sans SC", sans-serif;
+}
+
+button,
+input {
+  font: inherit;
+}

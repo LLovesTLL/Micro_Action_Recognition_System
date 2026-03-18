@@ -1,0 +1,60 @@
+.github/
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+Word/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+*.pyc
+.pytest_cache/
+.mypy_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Environment files
+.env
+
+# Build / distribution
+build/
+dist/
+*.egg-info/
+pip-wheel-metadata/
+
+# Logs
+*.log
+
+# Node
+frontend/node_modules/
+
+# Backend storage / uploads
+backend/storage/
+backend/storage/uploads/
+backend/storage/outputs/
+
+# Word documents
+*.docx
+*.doc
+
+# Model checkpoints and large binaries
+*.pth
+checkpoint*.pth
+
+# Data
+data/
+
+# OS generated
+__MACOSX/
+
+# Others
+*.sqlite3
+
