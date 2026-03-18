@@ -9,7 +9,22 @@ from .visualization_service import create_heatmap_overlay, save_frame_image
 
 
 def run_inference_pipeline(video_path: Path) -> InferenceResponse:
-    samples, duration = sample_video_frames(video_path, max_points=50)
+    # --- 优先尝试远程推理 (VideoMambaPro on Linux) ---
+    remote_result = model_service.predict_remote(video_path)
+    
+    if "error" not in remote_result:
+        # 远程执行成功逻辑 (这里需要对接后端可视化的具体中间数据，先做 Top-1 替换)
+        top_class = remote_result.get("top1", "unknown")
+        top_conf = remote_result.get("confidence", 0.0)
+        duration = remote_result.get("duration", 0.0)
+        note = f"Inference completed by REMOTE Linux Server ({remote_result.get('status')})."
+        
+        # 为了展示曲线，仍保留本地时序抽样逻辑 (或让远程也返回曲线数据)
+        samples, _ = sample_video_frames(video_path, max_points=50)
+    else:
+        # 远程不通，回退到本地占位逻辑
+        samples, duration = sample_video_frames(video_path, max_points=50)
+        note = f"Remote Inference Failed: {remote_result.get('error')}. Falling back to LOCAL mode."
 
     temporal_points: list[TemporalPoint] = []
     heatmaps: list[HeatmapFrame] = []
