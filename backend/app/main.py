@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .api.routes import router as api_router
 from .core.config import settings
+from .services.storage_service import cleanup_storage_dirs
 
 
 app = FastAPI(
@@ -23,6 +24,16 @@ app.add_middleware(
 @app.get("/health")
 def health_check() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.on_event("startup")
+def cleanup_on_startup() -> None:
+    cleanup_storage_dirs(settings.upload_dir, settings.output_dir)
+
+
+@app.on_event("shutdown")
+def cleanup_on_shutdown() -> None:
+    cleanup_storage_dirs(settings.upload_dir, settings.output_dir)
 
 
 app.include_router(api_router, prefix="/api/v1", tags=["inference"])

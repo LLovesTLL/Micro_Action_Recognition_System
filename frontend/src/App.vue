@@ -1,16 +1,19 @@
 <script setup>
-import { ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref } from 'vue'
 import UploadPanel from './components/UploadPanel.vue'
 import ResultDashboard from './components/ResultDashboard.vue'
-import { inferVideo } from './services/api'
+import { inferVideo, renderExpertVideo } from './services/api'
 
 const loading = ref(false)
+const exporting = ref(false)
 const error = ref('')
 const result = ref(null)
+const uploadedFile = ref(null)
 
 async function onSubmit(file) {
   loading.value = true
   error.value = ''
+  uploadedFile.value = file
 
   try {
     result.value = await inferVideo(file)
@@ -27,6 +30,56 @@ async function onSubmit(file) {
     loading.value = false
   }
 }
+
+async function onExportExpertVideo() {
+  if (!uploadedFile.value) {
+    error.value = '缺少原始视频文件，请重新上传后再导出。'
+    return
+  }
+
+  exporting.value = true
+  error.value = ''
+  try {
+    const data = await renderExpertVideo(uploadedFile.value)
+    if (!data?.local_download_url) {
+      throw new Error('导出成功但未返回下载地址')
+    }
+    window.open(data.local_download_url, '_blank')
+  } catch (err) {
+    const message = err?.response?.data?.detail || err?.message || '导出失败'
+    error.value = String(message)
+  } finally {
+    exporting.value = false
+  }
+}
+
+function cleanupTempOnExit() {
+  const url = '/api/v1/cleanup-temp'
+
+  if (navigator.sendBeacon) {
+    const blob = new Blob(['{}'], { type: 'application/json' })
+    navigator.sendBeacon(url, blob)
+    return
+  }
+
+  fetch(url, {
+    method: 'POST',
+    keepalive: true,
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}'
+  }).catch(() => {
+    // Best-effort cleanup on exit.
+  })
+}
+
+onMounted(() => {
+  window.addEventListener('beforeunload', cleanupTempOnExit)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('beforeunload', cleanupTempOnExit)
+  cleanupTempOnExit()
+})
 </script>
 
 <template>
@@ -34,14 +87,27 @@ async function onSubmit(file) {
     <main class="container">
       <header class="hero">
         <h1>微动作识别系统</h1>
-        <p>前后端分离集成版本 · 离线视频识别 · 时序概率曲线 · 热力图</p>
       </header>
 
-      <UploadPanel @submit="onSubmit" />
+      <section v-if="result" class="workspace split">
+        <aside class="left-pane">
+          <UploadPanel :initial-file="uploadedFile" @submit="onSubmit" />
+        </aside>
+        <section class="right-pane">
+          <ResultDashboard
+            :result="result"
+            :exporting="exporting"
+            @export-expert-video="onExportExpertVideo"
+          />
+        </section>
+      </section>
+
+      <section v-else class="workspace centered">
+        <UploadPanel :initial-file="uploadedFile" @submit="onSubmit" />
+      </section>
 
       <section v-if="loading" class="state-card">正在推理与生成可视化，请稍候...</section>
       <section v-else-if="error" class="state-card error">{{ error }}</section>
-      <ResultDashboard v-else-if="result" :result="result" />
     </main>
   </div>
 </template>
@@ -57,14 +123,55 @@ async function onSubmit(file) {
 }
 
 .container {
-  width: min(1040px, 100%);
+  width: min(1560px, 100%);
   margin: 0 auto;
   display: grid;
-  gap: 16px;
+  gap: 12px;
+}
+
+.workspace {
+  width: 100%;
+}
+
+.workspace.centered {
+  display: grid;
+  justify-items: center;
+}
+
+.workspace.centered > :first-child {
+  width: min(920px, 100%);
+}
+
+.workspace.split {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(360px, 0.95fr) minmax(780px, 1.6fr);
+  align-items: stretch;
+}
+
+.left-pane,
+.right-pane {
+  min-width: 0;
+}
+
+.left-pane {
+  display: flex;
+}
+
+.left-pane :deep(.upload-panel) {
+  width: 100%;
+  height: 100%;
+}
+
+@media (max-width: 980px) {
+  .workspace.split {
+    grid-template-columns: 1fr;
+  }
 }
 
 .hero {
-  padding: 6px 2px;
+  padding: 2px 2px;
+  text-align: center;
 }
 
 h1 {
@@ -73,15 +180,13 @@ h1 {
   letter-spacing: 0.03em;
 }
 
-p {
-  color: var(--muted);
-}
-
 .state-card {
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 14px;
   padding: 14px;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .state-card.error {

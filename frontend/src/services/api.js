@@ -17,3 +17,17 @@ export async function inferVideo(file) {
 
   return data
 }
+
+export async function renderExpertVideo(file) {
+  const formData = new FormData()
+  formData.append('file', file)
+
+  const { data } = await api.post('/render-expert', formData, {
+    headers: {
+      'Content-Type': 'multipart/form-data'
+    },
+    timeout: 300000
+  })
+
+  return data
+}
