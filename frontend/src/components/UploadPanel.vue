@@ -6,6 +6,14 @@ const props = defineProps({
   initialFile: {
     type: Object,
     default: null
+  },
+  uploading: {
+    type: Boolean,
+    default: false
+  },
+  uploadProgress: {
+    type: Number,
+    default: 0
   }
 })
 
@@ -89,8 +97,16 @@ function submit() {
       </template>
     </div>
 
-    <input type="file" accept="video/*" @change="onSelect" />
-    <button class="submit-btn" :disabled="!selectedFile" @click="submit">开始识别</button>
+    <input type="file" accept="video/*" :disabled="uploading" @change="onSelect" />
+    <div v-if="uploading" class="progress-wrap">
+      <div class="progress-bar">
+        <span class="progress-fill" :style="{ width: `${Math.max(0, Math.min(100, uploadProgress * 100)).toFixed(1)}%` }"></span>
+      </div>
+      <p class="progress-text">上传进度: {{ (Math.max(0, Math.min(100, uploadProgress * 100))).toFixed(1) }}%</p>
+    </div>
+    <button class="submit-btn" :disabled="!selectedFile || uploading" @click="submit">
+      {{ uploading ? '上传中...' : '开始识别' }}
+    </button>
   </section>
 </template>
 
@@ -158,5 +174,29 @@ input[type='file'] {
 .submit-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.progress-wrap {
+  margin-bottom: 10px;
+}
+
+.progress-bar {
+  height: 8px;
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, #6fd6ff, #8cffc9);
+  transition: width 0.2s ease;
+}
+
+.progress-text {
+  margin: 6px 0 0;
+  font-size: 0.82rem;
+  color: #cfe7ff;
 }
 </style>

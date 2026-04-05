@@ -2,17 +2,48 @@ from pathlib import Path
 from uuid import uuid4
 from urllib.parse import unquote
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from pydantic import BaseModel
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 
 from ..core.config import settings
 from ..schemas.inference import InferenceResponse, RenderExpertResponse
+from ..services.export_job_service import export_job_service
 from ..services.model_service import model_service
 from ..services.pipeline_service import run_inference_pipeline
 from ..services.storage_service import cleanup_storage_dirs
+from ..services.upload_session_service import UploadSessionService
 
 
 router = APIRouter()
+upload_session_service = UploadSessionService(settings.upload_dir / "sessions")
+
+
+class UploadSessionCreateRequest(BaseModel):
+    filename: str
+    total_size: int
+    chunk_size: int
+    total_chunks: int
+
+
+class RenderJobCreateRequest(BaseModel):
+    callback_url: str | None = None
+
+
+async def _stream_save_upload_file(file: UploadFile, target_path: Path, max_bytes: int) -> int:
+    total = 0
+    with open(target_path, "wb") as out:
+        while True:
+            chunk = await file.read(1024 * 1024)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > max_bytes:
+                out.close()
+                target_path.unlink(missing_ok=True)
+                raise HTTPException(status_code=413, detail=f"File exceeds {settings.max_upload_mb}MB limit.")
+            out.write(chunk)
+    return total
 
 
 @router.post("/infer", response_model=InferenceResponse)
@@ -21,17 +52,13 @@ async def infer_video(file: UploadFile = File(...)) -> InferenceResponse:
     if ext not in {".mp4", ".avi", ".mov", ".mkv"}:
         raise HTTPException(status_code=400, detail="Only mp4/avi/mov/mkv files are supported.")
 
-    content = await file.read()
-    if not content:
-        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
-
     max_bytes = settings.max_upload_mb * 1024 * 1024
-    if len(content) > max_bytes:
-        raise HTTPException(status_code=413, detail=f"File exceeds {settings.max_upload_mb}MB limit.")
 
     file_id = uuid4().hex
     target_path = settings.upload_dir / f"{file_id}{ext}"
-    target_path.write_bytes(content)
+    total = await _stream_save_upload_file(file, target_path, max_bytes)
+    if total <= 0:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
 
     try:
         return run_inference_pipeline(target_path)
@@ -49,17 +76,13 @@ async def render_expert_video(file: UploadFile = File(...)) -> RenderExpertRespo
     if ext not in {".mp4", ".avi", ".mov", ".mkv"}:
         raise HTTPException(status_code=400, detail="Only mp4/avi/mov/mkv files are supported.")
 
-    content = await file.read()
-    if not content:
-        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
-
     max_bytes = settings.max_upload_mb * 1024 * 1024
-    if len(content) > max_bytes:
-        raise HTTPException(status_code=413, detail=f"File exceeds {settings.max_upload_mb}MB limit.")
 
     file_id = uuid4().hex
     target_path = settings.upload_dir / f"{file_id}{ext}"
-    target_path.write_bytes(content)
+    total = await _stream_save_upload_file(file, target_path, max_bytes)
+    if total <= 0:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
 
     try:
         remote_result = model_service.render_expert_video_remote(target_path)
@@ -78,6 +101,137 @@ async def render_expert_video(file: UploadFile = File(...)) -> RenderExpertRespo
         raise HTTPException(status_code=500, detail=f"Render failed: {exc}") from exc
     finally:
         target_path.unlink(missing_ok=True)
+
+
+@router.post("/upload-sessions")
+def create_upload_session(payload: UploadSessionCreateRequest) -> dict:
+    try:
+        return upload_session_service.create_session(
+            filename=payload.filename,
+            total_size=payload.total_size,
+            chunk_size=payload.chunk_size,
+            total_chunks=payload.total_chunks,
+            max_upload_mb=500,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/upload-sessions/{session_id}")
+def get_upload_session(session_id: str) -> dict:
+    try:
+        return upload_session_service.get_status(session_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Upload session not found") from exc
+
+
+@router.put("/upload-sessions/{session_id}/chunks/{chunk_index}")
+async def upload_session_chunk(session_id: str, chunk_index: int, chunk: UploadFile = File(...)) -> dict:
+    try:
+        return await upload_session_service.write_chunk(session_id, chunk_index, chunk)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Upload session not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/upload-sessions/{session_id}/infer", response_model=InferenceResponse)
+def infer_from_upload_session(session_id: str) -> InferenceResponse:
+    try:
+        assembled_path = upload_session_service.assemble_file(session_id)
+        return run_inference_pipeline(assembled_path)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Upload session not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Inference failed: {exc}") from exc
+    finally:
+        upload_session_service.delete_session(session_id)
+
+
+@router.post("/upload-sessions/{session_id}/render-expert-async")
+def render_expert_async_from_upload_session(session_id: str, payload: RenderJobCreateRequest) -> dict:
+    try:
+        src_status = upload_session_service.get_status(session_id)
+        ext = Path(str(src_status.get("filename") or "")).suffix.lower() or ".mp4"
+        local_id = uuid4().hex
+        target_path = settings.upload_dir / f"async_render_{local_id}{ext}"
+        upload_session_service.move_assembled_to(session_id, target_path)
+
+        job = export_job_service.create_job(target_path, callback_url=payload.callback_url)
+        return {
+            "status": "accepted",
+            "job_id": job["job_id"],
+            "job_status": job["status"],
+            "created_at": job["created_at"],
+        }
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Upload session not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Create render job failed: {exc}") from exc
+    finally:
+        upload_session_service.delete_session(session_id)
+
+
+@router.get("/render-jobs/{job_id}")
+def get_render_job(job_id: str) -> dict:
+    job = export_job_service.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Render job not found")
+    return job
+
+
+@router.delete("/render-jobs/{job_id}")
+def delete_render_job(job_id: str, force: bool = Query(default=False)) -> dict:
+    try:
+        ok = export_job_service.delete_job(job_id, force=force)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    if not ok:
+        raise HTTPException(status_code=404, detail="Render job not found")
+
+    return {
+        "status": "success",
+        "deleted": 1,
+        "job_id": job_id,
+    }
+
+
+@router.get("/render-jobs")
+def list_render_jobs(
+    limit: int = Query(default=50, ge=1, le=200),
+    status: str | None = Query(default=None),
+    class_label: str | None = Query(default=None),
+) -> dict:
+    items = export_job_service.list_jobs(limit=200, status=status)
+    if class_label:
+        key = class_label.strip().lower()
+        items = [i for i in items if key in str(i.get("class_label") or "").lower()]
+    items = items[:limit]
+
+    return {
+        "status": "success",
+        "items": items,
+        "limit": limit,
+    }
+
+
+@router.delete("/render-jobs")
+def clear_render_jobs(
+    force: bool = Query(default=False),
+    status: str | None = Query(default=None),
+) -> dict:
+    deleted = export_job_service.clear_jobs(force=force, status=status)
+    return {
+        "status": "success",
+        "deleted": deleted,
+        "force": force,
+        "status_filter": status,
+    }
 
 
 @router.get("/remote-download/{filename}")
