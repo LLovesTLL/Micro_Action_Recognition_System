@@ -33,6 +33,7 @@
 - backend：本地 FastAPI 服务，负责上传校验、远程调用、结果规范化、静态资源与下载代理
 - frontend：Vue 页面，负责上传、结果可视化、导出触发
 - remote_inference_server.py：远程 Linux 侧推理服务，负责真实模型推理、注意力提取、时序概率、视频导出
+- remote_realtime_inference_server.py：远程 Linux 侧实时推理服务，负责摄像头帧实时识别与热点框生成
 - REMOTE_INFERENCE_GUIDE.md：远程部署与联调手册
 - README.md：项目总体状态与开发入口
 
@@ -70,6 +71,27 @@
 4. 前端轮询 GET /api/v1/render-jobs/{job_id} 查询任务状态
 5. 任务成功后返回 result.local_download_url，前端触发下载
 6. 导出任务同时进入任务历史，可在页面按类别筛选、删除与清理
+
+## 3.3 实时推理链路
+
+1. 前端主页面选择“实时推理”，进入实时页。
+2. 前端调用 POST /api/v1/realtime/session/start 创建会话，获取 session_id。
+3. 前端周期性抓取摄像头帧并调用 POST /api/v1/realtime/frame（multipart）。
+4. 本地后端将帧转发到远程 POST /realtime/predict-frame。
+5. 远程实时服务完成：
+
+- 16 帧滑窗构造
+- 模型前向（fast/full）
+- 运动差分热点框（hotspot）
+- timing 与 topk 组织
+
+6. 本地后端透传并规范化响应。
+7. 前端实时渲染：
+
+- Top1/TopK
+- 时延
+- 热点框叠加到摄像头画面
+- 会话状态与成功率
 
 ---
 
@@ -165,6 +187,22 @@
 
 - 返回本地生成的热图与帧图资源
 
+13. GET /realtime/health
+
+- 返回本地 realtime 桥接状态与远程 realtime 可达性
+
+14. POST /realtime/session/start
+
+- 创建实时会话，返回 session_id
+
+15. POST /realtime/frame
+
+- 接收单帧图片并转发远程实时推理，返回实时识别结果
+
+16. POST /realtime/session/stop
+
+- 停止并清理实时会话
+
 设计点：
 
 - 分片会话与直传模式并存，兼容老调用链
@@ -189,6 +227,8 @@
 - render_expert_video_remote
 - stream_remote_download
 - _post_video_to_remote
+- predict_realtime_frame_remote
+- check_realtime_health
 
 设计点：
 
@@ -314,6 +354,8 @@
 - AttentionHotspot
 - HeatmapFrame
 - RenderExpertResponse
+- RealtimeFrameResponse
+- RealtimeHotspot
 
 设计点：
 
@@ -332,16 +374,13 @@
 职责：
 
 - 挂载根组件
-- 管理全局页面状态：loading、error、result、exporting
-- 管理导出任务列表状态（刷新、筛选、删除、清理）
-- 分发两个核心动作：
-  - onSubmit：分片上传 + 触发推理
-  - onExportExpertVideo：分片上传 + 创建异步导出任务 + 轮询下载
+- 管理首页双入口状态：视频上传 / 实时推理
+- 管理上传工作区与实时工作区视图切换
 
 设计点：
 
-- 导出依赖最近一次上传文件，若文件缺失会阻止导出并给提示
-- 任务面板具备轻量历史能力：类别筛选、单条删除、清空历史
+- 原有上传能力完整保留
+- 新增实时页面，不影响原有上传识别与导出链路
 
 ## 5.2 上传组件
 
@@ -395,6 +434,30 @@
 - 推理触发：inferVideoChunked
 - 异步导出：createRenderExpertJob + pollRenderJobUntilDone
 - 任务管理：listRenderJobs / deleteRenderJob / clearRenderJobs
+- 实时推理：getRealtimeHealth / startRealtimeSession / sendRealtimeFrame / stopRealtimeSession
+
+## 5.5 实时推理页面
+
+文件：frontend/src/views/RealtimeWorkspace.vue
+
+职责：
+
+- 管理摄像头权限与采样
+- 管理实时会话生命周期
+- 展示 Top1/TopK/时延
+- 在视频上叠加热点框
+
+关键点：
+
+1. 推理模式
+
+- fast：跳帧真实推理 + 结果缓存，低延迟
+- full：每帧真实推理，准确性优先
+
+2. 热点框
+
+- 当前读取后端返回 RealtimeHotspot
+- 坐标为归一化比例，前端按百分比绝对定位绘制
 
 ---
 
@@ -525,6 +588,24 @@
 - 使用 http.server + cgi.parse_multipart
 - 无 FastAPI 依赖，部署简单
 
+## 6.8 远程实时服务 remote_realtime_inference_server.py（新增）
+
+本文件负责摄像头实时推理与低延迟优化。
+
+关键能力：
+
+- POST /realtime/predict-frame
+- GET /health
+- 会话缓存与 TTL 清理
+- fast/full 双模式
+- motion_diff 热点框输出
+
+低延迟策略：
+
+- GPU AMP 半精度推理
+- 启动预热
+- fast 模式跳帧推理 + 缓存复用
+
 ---
 
 ## 7. 数据契约要点（学习与联调重点）
@@ -544,6 +625,14 @@
 - local_download_url（本地代理）
 - render_meta
 - inference（完整推理结果）
+
+实时核心字段：
+
+- session_id / frame_id / mode
+- top_class / top_confidence / topk
+- hotspot（x1,y1,x2,y2,score,source）
+- timing（queue_ms, remote_infer_ms, roundtrip_ms, total_ms）
+- warming_up / source
 
 ---
 
@@ -579,6 +668,17 @@
 - 检查 /api/v1/upload-sessions/{session_id} 是否返回有效 uploaded_chunks
 - 若会话已失效，前端会自动创建新会话重新上传
 
+6. 实时推理 422
+
+- 通常是后端未更新到 Form+File 的参数签名
+- 重启 uvicorn 并确认 `/api/v1/realtime/frame` 使用 multipart 提交
+
+7. 实时推理不可达
+
+- 检查 9001 远程服务是否启动
+- 检查 SSH 是否映射 9001
+- 检查 /api/v1/realtime/health 的 remote_realtime.reachable
+
 ---
 
 ## 9. 推荐阅读顺序
@@ -592,41 +692,14 @@
 5. backend/app/schemas/inference.py
 6. frontend/src/App.vue
 7. frontend/src/components/ResultDashboard.vue
-8. remote_inference_server.py
+8. server/remote_inference_server.py
+9. server/remote_realtime_inference_server.py
 
 这样可以先理解本地业务边界，再深入远程重计算细节。
 
 ---
 
-## 10. 后续演进建议
+## 10. 结语
 
-当前版本已完成阶段目标，建议进入“稳定性与可观测”阶段。
-
-### 建议方向 A（增强可观测）
-
-1. **GPU 运行状态字段**
-
-- 在健康检查与推理返回中增加显存占用、利用率、温度。
-
-2. **请求追踪 ID**
-
-- 为每次推理与导出生成 `request_id`，本地与服务端日志可对齐追踪。
-
-### 建议方向 B（体验优化）
-
-1. **双模式推理**
-
-- `fast`：关闭时序额外前向，低延迟。
-- `full`：开启时序与热图，完整分析。
-
-2. **任务历史治理策略**
-
-- 增加自动清理策略（TTL、条数上限）。
-- 增加历史导出与归档能力（JSON/CSV）。
-
----
-
-## 11. 结语
-
-当前项目已经从“可跑通演示”升级到“可解释、可导出、可联调、可管理历史”的工程状态。
-本地端已完成分片上传、异步导出、任务历史管理等关键优化，具备阶段性交付条件。
+当前项目已经从“可跑通演示”升级到“可解释、可导出、可联调、可管理历史、可实时”的工程状态。
+本地端已完成分片上传、异步导出、任务历史管理、实时推理等关键优化，具备阶段性交付条件。

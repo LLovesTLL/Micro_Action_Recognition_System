@@ -13,8 +13,11 @@ import uuid
 from urllib.parse import urlparse
 
 # --- 1. 环境与路径配置 ---
-sys.path.append("/home/xcguo/Project/Micro_action")
-CHECKPOINT_PATH = "/home/xcguo/Project/Micro_action/exp/MySelf/Thirteenth/checkpoint-best.pth"
+PROJECT_ROOT = "/data/xcguo/Project/Micro_action"
+sys.path.append(PROJECT_ROOT)
+sys.path.append(os.path.join(PROJECT_ROOT, "mamba"))
+sys.path.append(os.path.join(PROJECT_ROOT, "causal-conv1d"))
+CHECKPOINT_PATH = "/data/xcguo/Project/Micro_action/exp/mySelf/Thirteenth/checkpoint-best.pth"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 PORT = 9000
 NUM_FRAMES = 16

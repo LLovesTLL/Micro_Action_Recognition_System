@@ -218,3 +218,35 @@ export async function pollRenderJobUntilDone(jobId, options = {}) {
 
   throw new Error('导出任务超时，请稍后在服务端继续查询。')
 }
+
+export async function getRealtimeHealth() {
+  const { data } = await api.get('/realtime/health')
+  return data
+}
+
+export async function startRealtimeSession(mode = 'fast') {
+  const { data } = await api.post('/realtime/session/start', { mode })
+  return data
+}
+
+export async function stopRealtimeSession(sessionId) {
+  const { data } = await api.post('/realtime/session/stop', { session_id: sessionId })
+  return data
+}
+
+export async function sendRealtimeFrame({ sessionId, frameBlob, tsClientMs, mode = 'fast' }) {
+  const form = new FormData()
+  form.append('session_id', sessionId)
+  form.append('mode', mode)
+  form.append('ts_client_ms', String(tsClientMs || Date.now()))
+  form.append('frame', frameBlob, `frame-${Date.now()}.jpg`)
+
+  const { data } = await api.post('/realtime/frame', form, {
+    headers: {
+      'Content-Type': 'multipart/form-data'
+    },
+    timeout: 30000
+  })
+
+  return data
+}

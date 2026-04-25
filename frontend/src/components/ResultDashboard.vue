@@ -418,31 +418,21 @@ figure {
 
 img {
   width: 100%;
-  height: 90px;
-  object-fit: cover;
-  border-radius: 8px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
 }
 
 figcaption {
-  margin-top: 6px;
-  color: var(--muted);
-  font-size: 0.9rem;
+  margin-top: 4px;
+  font-size: 0.8rem;
+  color: #b8cbe0;
 }
 
 .hotspot-box {
   position: absolute;
-  border: 2px solid #ff3b3b;
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.45) inset;
-  border-radius: 4px;
+  border: 2px solid rgba(255, 80, 80, 0.96);
+  border-radius: 8px;
+  box-shadow: 0 0 0 1px rgba(255, 80, 80, 0.4), 0 0 0 9999px rgba(255, 80, 80, 0.06) inset;
   pointer-events: none;
-}
-
-.curve-anno-text {
-  font-size: 11px;
-  font-weight: 700;
-  paint-order: stroke;
-  stroke: rgba(9, 18, 28, 0.92);
-  stroke-width: 2px;
-  stroke-linejoin: round;
 }
 </style>

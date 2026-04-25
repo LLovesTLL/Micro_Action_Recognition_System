@@ -1,9 +1,10 @@
 from pathlib import Path
 from uuid import uuid4
 from urllib.parse import unquote
+from time import perf_counter
 
 from pydantic import BaseModel
-from fastapi import APIRouter, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 
 from ..core.config import settings
@@ -11,8 +12,18 @@ from ..schemas.inference import InferenceResponse, RenderExpertResponse
 from ..services.export_job_service import export_job_service
 from ..services.model_service import model_service
 from ..services.pipeline_service import run_inference_pipeline
+from ..services.realtime_service import realtime_registry
 from ..services.storage_service import cleanup_storage_dirs
 from ..services.upload_session_service import UploadSessionService
+from ..schemas.realtime import (
+    RealtimeFrameResponse,
+    RealtimeHotspot,
+    RealtimeSessionResponse,
+    RealtimeSessionStartRequest,
+    RealtimeSessionStopRequest,
+    RealtimeTiming,
+    RealtimeTopKItem,
+)
 
 
 router = APIRouter()
@@ -28,6 +39,13 @@ class UploadSessionCreateRequest(BaseModel):
 
 class RenderJobCreateRequest(BaseModel):
     callback_url: str | None = None
+
+
+def _normalize_mode(mode: str) -> str:
+    m = (mode or "fast").strip().lower()
+    if m not in {"fast", "full"}:
+        raise HTTPException(status_code=400, detail="mode must be 'fast' or 'full'")
+    return m
 
 
 async def _stream_save_upload_file(file: UploadFile, target_path: Path, max_bytes: int) -> int:
@@ -270,3 +288,120 @@ def get_asset(filename: str) -> FileResponse:
     if not target.exists() or not target.is_file():
         raise HTTPException(status_code=404, detail="Asset not found.")
     return FileResponse(target)
+
+
+@router.get("/realtime/health")
+def realtime_health() -> dict:
+    return {
+        "status": "ok",
+        "local": {
+            "service": "backend_realtime_bridge",
+            "sessions": "in_memory",
+        },
+        "remote_realtime": model_service.check_realtime_health(),
+    }
+
+
+@router.post("/realtime/session/start", response_model=RealtimeSessionResponse)
+def realtime_session_start(payload: RealtimeSessionStartRequest) -> RealtimeSessionResponse:
+    mode = _normalize_mode(payload.mode)
+    created = realtime_registry.create_session(mode=mode)
+    return RealtimeSessionResponse(session_id=created["session_id"], mode=mode)
+
+
+@router.post("/realtime/session/stop")
+def realtime_session_stop(payload: RealtimeSessionStopRequest) -> dict:
+    ok = realtime_registry.delete_session(payload.session_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Realtime session not found")
+    return {
+        "status": "success",
+        "session_id": payload.session_id,
+    }
+
+
+@router.post("/realtime/frame", response_model=RealtimeFrameResponse)
+async def realtime_frame_infer(
+    session_id: str = Form(...),
+    mode: str = Form(...),
+    ts_client_ms: int = Form(...),
+    frame: UploadFile = File(...),
+) -> RealtimeFrameResponse:
+    mode_normalized = _normalize_mode(mode)
+    session = realtime_registry.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Realtime session not found")
+
+    if bool(session.get("inflight")):
+        raise HTTPException(status_code=429, detail="Previous frame is still in-flight")
+
+    ext = Path(frame.filename or "").suffix.lower()
+    if ext and ext not in {".jpg", ".jpeg", ".png", ".webp"}:
+        raise HTTPException(status_code=400, detail="Only jpg/jpeg/png/webp frame is supported")
+
+    payload = await frame.read()
+    if not payload:
+        raise HTTPException(status_code=400, detail="Frame is empty")
+
+    if len(payload) > 3 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Frame exceeds 3MB limit")
+
+    realtime_registry.mark_inflight(session_id, True)
+    t0 = perf_counter()
+    try:
+        remote = model_service.predict_realtime_frame_remote(
+            frame_bytes=payload,
+            session_id=session_id,
+            mode=mode_normalized,
+            ts_client_ms=ts_client_ms,
+            timeout=30.0,
+        )
+        if "error" in remote:
+            raise HTTPException(status_code=502, detail=f"Remote realtime failed: {remote.get('error')}")
+
+        realtime_registry.touch_frame(session_id)
+
+        topk_raw = remote.get("topk") if isinstance(remote.get("topk"), list) else []
+        topk = [
+            RealtimeTopKItem(
+                label_id=int(item.get("label_id", -1)),
+                label=str(item.get("label", "unknown")),
+                confidence=float(item.get("confidence", 0.0)),
+            )
+            for item in topk_raw
+        ]
+
+        timing_remote = remote.get("timing") if isinstance(remote.get("timing"), dict) else {}
+        total_ms = (perf_counter() - t0) * 1000.0
+        timing = RealtimeTiming(
+            queue_ms=float(timing_remote.get("queue_ms", 0.0)),
+            remote_infer_ms=float(timing_remote.get("remote_infer_ms", 0.0)),
+            roundtrip_ms=float(timing_remote.get("roundtrip_ms", 0.0)),
+            total_ms=float(timing_remote.get("total_ms", total_ms)),
+        )
+
+        return RealtimeFrameResponse(
+            session_id=session_id,
+            frame_id=str(remote.get("frame_id") or uuid4().hex[:12]),
+            mode=mode_normalized,
+            top_class=str(remote.get("top_class") or "unknown"),
+            top_confidence=float(remote.get("top_confidence") or 0.0),
+            topk=topk,
+            hotspot=(
+                RealtimeHotspot(
+                    x1=float(remote["hotspot"].get("x1", 0.0)),
+                    y1=float(remote["hotspot"].get("y1", 0.0)),
+                    x2=float(remote["hotspot"].get("x2", 0.0)),
+                    y2=float(remote["hotspot"].get("y2", 0.0)),
+                    score=float(remote["hotspot"].get("score", 0.0)),
+                    source=str(remote["hotspot"].get("source") or "motion_diff"),
+                )
+                if isinstance(remote.get("hotspot"), dict)
+                else None
+            ),
+            warming_up=bool(remote.get("warming_up", False)),
+            timing=timing,
+            source=str(remote.get("source") or "remote_realtime_server"),
+        )
+    finally:
+        realtime_registry.mark_inflight(session_id, False)

@@ -2,6 +2,7 @@ import requests
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
+import time
 
 import numpy as np
 
@@ -33,9 +34,12 @@ class ModelService:
         ]
         # 远程服务器地址 (如果是 SSH 隧道，通常是 localhost:9000)
         self.remote_base_url = "http://localhost:9000"
+        self.remote_realtime_base_url = "http://localhost:9001"
         self.remote_url = f"{self.remote_base_url}/predict"
         self.remote_render_url = f"{self.remote_base_url}/render_expert_video"
         self.remote_health_url = f"{self.remote_base_url}/health"
+        self.remote_realtime_health_url = f"{self.remote_realtime_base_url}/health"
+        self.remote_realtime_predict_url = f"{self.remote_realtime_base_url}/realtime/predict-frame"
         self.is_remote_connected = self._check_remote_health()
         # 兼容性属性，防止 pipeline_service.py 报错
         self.checkpoint_loaded = self.is_remote_connected 
@@ -69,6 +73,59 @@ class ModelService:
         safe_name = quote(filename)
         url = f"{self.remote_base_url}/download/{safe_name}"
         return requests.get(url, timeout=300.0, stream=True)
+
+    def check_realtime_health(self) -> dict[str, Any]:
+        try:
+            resp = requests.get(self.remote_realtime_health_url, timeout=2.0)
+            if resp.status_code != 200:
+                return {
+                    "reachable": False,
+                    "status_code": resp.status_code,
+                    "detail": resp.text,
+                }
+            data = resp.json() if resp.text else {}
+            data["reachable"] = True
+            return data
+        except Exception as exc:
+            return {
+                "reachable": False,
+                "error": str(exc),
+            }
+
+    def predict_realtime_frame_remote(
+        self,
+        frame_bytes: bytes,
+        session_id: str,
+        mode: str,
+        ts_client_ms: int,
+        timeout: float = 30.0,
+    ) -> dict[str, Any]:
+        started = time.perf_counter()
+        try:
+            response = requests.post(
+                self.remote_realtime_predict_url,
+                files={"frame": (f"{session_id}.jpg", frame_bytes, "image/jpeg")},
+                data={
+                    "session_id": session_id,
+                    "mode": mode,
+                    "ts_client_ms": str(ts_client_ms),
+                },
+                timeout=timeout,
+            )
+
+            if response.status_code != 200:
+                return {
+                    "error": f"Remote Realtime Server Error: {response.status_code}",
+                    "detail": response.text,
+                }
+
+            payload = response.json()
+            payload.setdefault("timing", {})
+            if "roundtrip_ms" not in payload["timing"]:
+                payload["timing"]["roundtrip_ms"] = round((time.perf_counter() - started) * 1000.0, 3)
+            return payload
+        except Exception as exc:
+            return {"error": str(exc)}
 
     def _post_video_to_remote(self, url: str, video_file_path: Path, timeout: float) -> dict[str, Any]:
         try:

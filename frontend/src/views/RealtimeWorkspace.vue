@@ -1,0 +1,768 @@
+<script setup>
+import { computed, onBeforeUnmount, ref } from 'vue'
+import {
+  getRealtimeHealth,
+  sendRealtimeFrame,
+  startRealtimeSession,
+  stopRealtimeSession
+} from '../services/api'
+
+const videoRef = ref(null)
+const canvasRef = ref(null)
+
+const mode = ref('fast')
+const cameraReady = ref(false)
+const running = ref(false)
+const busy = ref(false)
+const error = ref('')
+const statusText = ref('未启动')
+
+const mediaStream = ref(null)
+const timer = ref(null)
+const sessionId = ref('')
+const lastResult = ref(null)
+
+const requestCount = ref(0)
+const successCount = ref(0)
+const avgLatencyMs = ref(0)
+const latencyHistory = ref([])
+const confidenceHistory = ref([])
+
+const snapshotIntervalMs = 450
+
+function formatErrorMessage(err, fallback) {
+  const detail = err?.response?.data?.detail
+  if (typeof detail === 'string' && detail.trim()) return detail
+  if (Array.isArray(detail)) {
+    return detail.map((item) => {
+      if (typeof item === 'string') return item
+      if (item && typeof item === 'object') {
+        const loc = Array.isArray(item.loc) ? item.loc.join('.') : ''
+        const msg = String(item.msg || '')
+        return loc ? `${loc}: ${msg}` : msg
+      }
+      return String(item)
+    }).join(' | ')
+  }
+  if (detail && typeof detail === 'object') {
+    return JSON.stringify(detail)
+  }
+
+  const msg = err?.message
+  if (typeof msg === 'string' && msg.trim()) return msg
+  return fallback
+}
+
+const topLabel = computed(() => {
+  if (!lastResult.value) return '-'
+  const c = Number(lastResult.value.top_confidence || 0)
+  return `${lastResult.value.top_class || 'unknown'} (${(c * 100).toFixed(1)}%)`
+})
+
+const topk = computed(() => {
+  return Array.isArray(lastResult.value?.topk) ? lastResult.value.topk : []
+})
+
+const top1Label = computed(() => {
+  const label = lastResult.value?.top_class
+  if (!label) return '-'
+  if (label === 'no obvious action') return '无明显动作'
+  return label
+})
+
+const top1Confidence = computed(() => Math.max(0, Math.min(1, Number(lastResult.value?.top_confidence || 0))))
+
+const successRate = computed(() => {
+  if (!requestCount.value) return 0
+  return Math.max(0, Math.min(1, successCount.value / requestCount.value))
+})
+
+const latencyRing = computed(() => {
+  const value = Math.max(0, Number(avgLatencyMs.value || 0))
+  const max = Math.max(1200, value)
+  return Math.max(0.05, Math.min(1, value / max))
+})
+
+const avgLatencyLabel = computed(() => (avgLatencyMs.value > 0 ? `${avgLatencyMs.value.toFixed(1)}ms` : '-'))
+
+const confidenceSparkline = computed(() => {
+  return sparklinePath(confidenceHistory.value, 0, 1)
+})
+
+const latencySparkline = computed(() => {
+  const max = Math.max(300, ...latencyHistory.value, 1)
+  return sparklinePath(latencyHistory.value, 0, max)
+})
+
+function sparklinePath(values, min, max) {
+  const data = Array.isArray(values) ? values.slice(-16) : []
+  if (!data.length) return ''
+  const width = 120
+  const height = 40
+  const step = data.length > 1 ? width / (data.length - 1) : width
+  const span = Math.max(max - min, 1e-6)
+  return data
+    .map((value, index) => {
+      const x = index * step
+      const y = height - ((Math.max(min, Math.min(max, value)) - min) / span) * height
+      return `${x},${y.toFixed(2)}`
+    })
+    .join(' ')
+}
+
+function pushHistory(listRef, value, limit = 16) {
+  if (!Number.isFinite(value)) return
+  listRef.value = [...listRef.value.slice(-(limit - 1)), value]
+}
+
+const timingText = computed(() => {
+  const t = lastResult.value?.timing
+  if (!t) return '-'
+  const total = Number(t.total_ms || 0).toFixed(1)
+  const remote = Number(t.remote_infer_ms || 0).toFixed(1)
+  const rtt = Number(t.roundtrip_ms || 0).toFixed(1)
+  return `total ${total}ms | remote ${remote}ms | rtt ${rtt}ms`
+})
+
+const hotspot = computed(() => {
+  if (!running.value) return null
+
+  const hs = lastResult.value?.hotspot
+  if (!hs || typeof hs !== 'object') return null
+
+  const x1 = Math.max(0, Math.min(1, Number(hs.x1) || 0))
+  const y1 = Math.max(0, Math.min(1, Number(hs.y1) || 0))
+  const x2 = Math.max(0, Math.min(1, Number(hs.x2) || 0))
+  const y2 = Math.max(0, Math.min(1, Number(hs.y2) || 0))
+
+  if (x2 <= x1 || y2 <= y1) return null
+  return {
+    x1,
+    y1,
+    x2,
+    y2,
+    score: Number(hs.score || 0),
+    source: hs.source || 'motion_diff'
+  }
+})
+
+const hotspotStyle = computed(() => {
+  const hs = hotspot.value
+  if (!hs) return null
+  return {
+    left: `${hs.x1 * 100}%`,
+    top: `${hs.y1 * 100}%`,
+    width: `${(hs.x2 - hs.x1) * 100}%`,
+    height: `${(hs.y2 - hs.y1) * 100}%`
+  }
+})
+
+async function ensureCamera() {
+  if (cameraReady.value) return
+  error.value = ''
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        width: { ideal: 960 },
+        height: { ideal: 540 },
+        facingMode: 'user'
+      },
+      audio: false
+    })
+
+    mediaStream.value = stream
+    if (videoRef.value) {
+      videoRef.value.srcObject = stream
+      await videoRef.value.play()
+    }
+    cameraReady.value = true
+    statusText.value = '摄像头已就绪'
+  } catch (err) {
+    error.value = `摄像头打开失败: ${String(err?.message || err)}`
+    statusText.value = '摄像头失败'
+  }
+}
+
+function stopCameraOnly() {
+  if (mediaStream.value) {
+    for (const track of mediaStream.value.getTracks()) {
+      track.stop()
+    }
+    mediaStream.value = null
+  }
+  if (videoRef.value) {
+    videoRef.value.srcObject = null
+  }
+  cameraReady.value = false
+}
+
+function toBlob(canvas) {
+  return new Promise((resolve) => {
+    canvas.toBlob((blob) => resolve(blob), 'image/jpeg', 0.78)
+  })
+}
+
+async function captureAndInfer() {
+  if (!running.value || busy.value) return
+  if (!videoRef.value || !canvasRef.value || !sessionId.value) return
+
+  busy.value = true
+  requestCount.value += 1
+  try {
+    const video = videoRef.value
+    const canvas = canvasRef.value
+    const ctx = canvas.getContext('2d')
+
+    const width = video.videoWidth || 640
+    const height = video.videoHeight || 360
+    canvas.width = width
+    canvas.height = height
+    ctx.drawImage(video, 0, 0, width, height)
+
+    const frameBlob = await toBlob(canvas)
+    if (!frameBlob) throw new Error('帧编码失败')
+
+    const ts = Date.now()
+    const resp = await sendRealtimeFrame({
+      sessionId: sessionId.value,
+      frameBlob,
+      tsClientMs: ts,
+      mode: mode.value
+    })
+
+    lastResult.value = resp
+    successCount.value += 1
+
+    const latency = Number(resp?.timing?.total_ms || 0)
+    if (latency > 0) {
+      if (avgLatencyMs.value <= 0) {
+        avgLatencyMs.value = latency
+      } else {
+        avgLatencyMs.value = avgLatencyMs.value * 0.85 + latency * 0.15
+      }
+      pushHistory(latencyHistory, latency)
+    }
+
+    pushHistory(confidenceHistory, top1Confidence.value)
+
+    statusText.value = resp?.warming_up ? '模型预热中...' : '实时推理中'
+  } catch (err) {
+    error.value = formatErrorMessage(err, '实时推理失败')
+    statusText.value = '推理异常'
+  } finally {
+    busy.value = false
+  }
+}
+
+async function startRealtime() {
+  error.value = ''
+  await ensureCamera()
+  if (!cameraReady.value) return
+
+  try {
+    const health = await getRealtimeHealth()
+    if (health?.remote_realtime?.reachable === false) {
+      throw new Error('远端实时服务不可达，请先启动远端 realtime server')
+    }
+  } catch (err) {
+    error.value = formatErrorMessage(err, '实时服务健康检查失败')
+    return
+  }
+
+  try {
+    const started = await startRealtimeSession(mode.value)
+    sessionId.value = started.session_id
+    running.value = true
+    statusText.value = '实时推理中'
+
+    if (timer.value) {
+      clearInterval(timer.value)
+    }
+    timer.value = setInterval(() => {
+      captureAndInfer()
+    }, snapshotIntervalMs)
+  } catch (err) {
+    error.value = formatErrorMessage(err, '实时会话创建失败')
+    statusText.value = '会话创建失败'
+  }
+}
+
+function pauseRealtime() {
+  running.value = false
+  if (timer.value) {
+    clearInterval(timer.value)
+    timer.value = null
+  }
+  statusText.value = '已暂停'
+}
+
+async function stopRealtimeAll() {
+  pauseRealtime()
+  const sid = sessionId.value
+  sessionId.value = ''
+  if (sid) {
+    try {
+      await stopRealtimeSession(sid)
+    } catch {
+      // no-op
+    }
+  }
+  stopCameraOnly()
+  statusText.value = '已停止'
+}
+
+onBeforeUnmount(() => {
+  stopRealtimeAll()
+})
+</script>
+
+<template>
+  <main class="rt-wrap">
+    <header class="rt-head">
+      <h1>微动作识别系统 · 实时推理</h1>
+      <p>本地采集摄像头帧并转发到远端 GPU 推理，当前为 {{ mode }} 模式。</p>
+    </header>
+
+    <section class="rt-grid">
+      <article class="camera-panel">
+        <div class="camera-toolbar">
+          <label>
+            推理模式
+            <select v-model="mode" :disabled="running">
+              <option value="fast">fast</option>
+              <option value="full">full</option>
+            </select>
+          </label>
+          <div class="btn-row">
+            <button class="btn" @click="ensureCamera" :disabled="cameraReady">开启摄像头</button>
+            <button class="btn primary" @click="startRealtime" :disabled="running">开始实时推理</button>
+            <button class="btn" @click="pauseRealtime" :disabled="!running">暂停</button>
+            <button class="btn danger" @click="stopRealtimeAll">停止并关闭</button>
+          </div>
+        </div>
+
+        <div class="camera-frame">
+          <video ref="videoRef" autoplay muted playsinline></video>
+          <div v-if="hotspotStyle" class="hotspot-box" :style="hotspotStyle"></div>
+          <canvas ref="canvasRef" class="hidden-canvas"></canvas>
+        </div>
+
+        <p class="status">状态: {{ statusText }}</p>
+        <p v-if="hotspot" class="hotspot-meta">
+          热点区域: {{ hotspot.source }} | score {{ hotspot.score.toFixed(3) }}
+        </p>
+        <p v-if="error" class="error">{{ error }}</p>
+      </article>
+
+      <article class="result-panel">
+        <div class="panel-head">
+          <div>
+            <h2>实时结果</h2>
+            <p>当前会话的识别状态与运行指标</p>
+          </div>
+          <div class="live-pill">{{ sessionId || 'no-session' }}</div>
+        </div>
+
+        <section class="top1-card">
+          <div class="top1-label">Top-1</div>
+          <h3>{{ top1Label }}</h3>
+          <div class="top1-row">
+            <div class="top1-score">
+              <svg viewBox="0 0 120 120" class="ring-chart" aria-hidden="true">
+                <circle cx="60" cy="60" r="42" class="ring-track"></circle>
+                <circle
+                  cx="60"
+                  cy="60"
+                  r="42"
+                  class="ring-progress confidence"
+                  :stroke-dasharray="2 * Math.PI * 42"
+                  :stroke-dashoffset="(2 * Math.PI * 42) * (1 - top1Confidence)"
+                ></circle>
+                <text x="60" y="56" text-anchor="middle" class="ring-value">{{ (top1Confidence * 100).toFixed(0) }}%</text>
+                <text x="60" y="72" text-anchor="middle" class="ring-label">置信度</text>
+              </svg>
+            </div>
+            <div class="top1-meta">
+              <p><strong>时延:</strong> {{ timingText }}</p>
+              <p><strong>平滑时延:</strong> {{ avgLatencyLabel }}</p>
+              <p><strong>请求成功率:</strong> {{ (successRate * 100).toFixed(1) }}%</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="metric-grid">
+          <div class="metric-card warm">
+            <span>成功率</span>
+            <strong>{{ successCount }}/{{ requestCount }}</strong>
+            <div class="bar-track"><span class="bar-fill success" :style="{ width: `${successRate * 100}%` }"></span></div>
+          </div>
+          <div class="metric-card cool">
+            <span>平均时延</span>
+            <strong>{{ avgLatencyLabel }}</strong>
+            <svg viewBox="0 0 120 40" class="sparkline" aria-hidden="true">
+              <polyline v-if="latencySparkline" :points="latencySparkline" class="sparkline-line latency"></polyline>
+            </svg>
+          </div>
+          <div class="metric-card cool">
+            <span>Top-1 趋势</span>
+            <strong>{{ (top1Confidence * 100).toFixed(1) }}%</strong>
+            <svg viewBox="0 0 120 40" class="sparkline" aria-hidden="true">
+              <polyline v-if="confidenceSparkline" :points="confidenceSparkline" class="sparkline-line confidence"></polyline>
+            </svg>
+          </div>
+        </section>
+
+        <div class="topk-box" v-if="topk.length">
+          <h3>TopK</h3>
+          <ul>
+            <li v-for="item in topk" :key="`${item.label_id}-${item.label}`">
+              <span>{{ item.label }}</span>
+              <strong>{{ (Number(item.confidence || 0) * 100).toFixed(1) }}%</strong>
+            </li>
+          </ul>
+        </div>
+      </article>
+    </section>
+  </main>
+</template>
+
+<style scoped>
+.rt-wrap {
+  width: min(1360px, 100%);
+  margin: 0 auto;
+  display: grid;
+  gap: 12px;
+}
+
+.rt-head h1 {
+  margin: 0;
+  font-size: clamp(1.6rem, 3.4vw, 2.4rem);
+}
+
+.rt-head p {
+  margin: 6px 0 0;
+  color: var(--muted);
+}
+
+.rt-grid {
+  display: grid;
+  grid-template-columns: 1.45fr 1fr;
+  gap: 12px;
+}
+
+@media (max-width: 980px) {
+  .rt-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.camera-panel,
+.result-panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 14px;
+}
+
+.panel-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.panel-head h2 {
+  margin: 0;
+  font-size: 1.2rem;
+}
+
+.panel-head p {
+  margin: 4px 0 0;
+  color: #a8bdd0;
+  font-size: 0.92rem;
+}
+
+.live-pill {
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(111, 214, 255, 0.14);
+  border: 1px solid rgba(111, 214, 255, 0.32);
+  color: #bfefff;
+  font-size: 0.82rem;
+}
+
+.top1-card {
+  margin-top: 12px;
+  padding: 14px;
+  border-radius: 18px;
+  background: linear-gradient(135deg, rgba(255, 122, 89, 0.22), rgba(111, 214, 255, 0.14));
+  border: 1px solid rgba(255, 179, 102, 0.28);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.18);
+}
+
+.top1-label {
+  color: #ffd7a8;
+  font-size: 0.76rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.top1-card h3 {
+  margin: 6px 0 0;
+  font-size: clamp(1.6rem, 3vw, 2.2rem);
+}
+
+.top1-row {
+  display: grid;
+  grid-template-columns: 140px 1fr;
+  gap: 14px;
+  align-items: center;
+  margin-top: 8px;
+}
+
+@media (max-width: 560px) {
+  .top1-row {
+    grid-template-columns: 1fr;
+    justify-items: center;
+  }
+}
+
+.top1-meta {
+  display: grid;
+  gap: 6px;
+}
+
+.top1-meta p {
+  margin: 0;
+  color: #edf5ff;
+}
+
+.ring-chart {
+  width: 120px;
+  height: 120px;
+  transform: rotate(-90deg);
+}
+
+.ring-track,
+.ring-progress {
+  fill: none;
+  stroke-width: 10;
+}
+
+.ring-track {
+  stroke: rgba(255, 255, 255, 0.1);
+}
+
+.ring-progress.confidence {
+  stroke: #8cffc9;
+  stroke-linecap: round;
+}
+
+.ring-value,
+.ring-label {
+  transform: rotate(90deg);
+  fill: #edf5ff;
+}
+
+.ring-value {
+  font-size: 24px;
+  font-weight: 800;
+}
+
+.ring-label {
+  font-size: 11px;
+  fill: #c5d8eb;
+}
+
+.metric-grid {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+@media (max-width: 760px) {
+  .metric-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.metric-card {
+  border-radius: 14px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.metric-card span {
+  display: block;
+  color: #a8bdd0;
+  font-size: 0.82rem;
+}
+
+.metric-card strong {
+  display: block;
+  margin-top: 4px;
+  font-size: 1rem;
+}
+
+.metric-card.warm {
+  background: linear-gradient(135deg, rgba(255, 122, 89, 0.2), rgba(255, 179, 102, 0.08));
+}
+
+.metric-card.cool {
+  background: linear-gradient(135deg, rgba(111, 214, 255, 0.16), rgba(140, 255, 201, 0.08));
+}
+
+.bar-track {
+  margin-top: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+}
+
+.bar-fill.success {
+  background: linear-gradient(90deg, #6fd6ff, #8cffc9);
+}
+
+.sparkline {
+  width: 100%;
+  height: 46px;
+  margin-top: 6px;
+}
+
+.sparkline-line {
+  fill: none;
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.sparkline-line.latency {
+  stroke: #ffb366;
+}
+
+.sparkline-line.confidence {
+  stroke: #8cffc9;
+}
+
+.camera-toolbar {
+  display: grid;
+  gap: 8px;
+}
+
+.camera-toolbar select {
+  margin-left: 8px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(0, 0, 0, 0.2);
+  color: #e9f1ff;
+  padding: 3px 8px;
+}
+
+.btn-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.btn {
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.06);
+  color: #e8f4ff;
+  border-radius: 10px;
+  padding: 7px 12px;
+  cursor: pointer;
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.btn.primary {
+  border-color: rgba(111, 214, 255, 0.6);
+  background: linear-gradient(130deg, rgba(111, 214, 255, 0.3), rgba(76, 186, 233, 0.35));
+}
+
+.btn.danger {
+  border-color: rgba(255, 122, 89, 0.5);
+  background: rgba(255, 122, 89, 0.17);
+}
+
+.camera-frame {
+  margin-top: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 12px;
+  overflow: hidden;
+  background: rgba(3, 8, 14, 0.75);
+  position: relative;
+}
+
+.camera-frame video {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+}
+
+.hidden-canvas {
+  display: none;
+}
+
+.hotspot-box {
+  position: absolute;
+  border: 2px solid rgba(255, 80, 80, 0.95);
+  box-shadow: 0 0 0 9999px rgba(255, 0, 0, 0.08) inset;
+  border-radius: 6px;
+  pointer-events: none;
+}
+
+.status {
+  margin: 10px 0 0;
+  color: #d4e6f8;
+}
+
+.error {
+  color: #ffd0d0;
+}
+
+.hotspot-meta {
+  margin: 6px 0 0;
+  color: #ffd7d7;
+  font-size: 0.9rem;
+}
+
+.topk-box {
+  margin-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  padding-top: 8px;
+}
+
+.topk-box ul {
+  margin: 0;
+  padding-left: 0;
+  list-style: none;
+  display: grid;
+  gap: 8px;
+}
+
+.topk-box li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+</style>
