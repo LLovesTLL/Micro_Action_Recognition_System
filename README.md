@@ -58,7 +58,7 @@
 
 - `backend/`：本机运行环境（Windows），处理业务逻辑与可视化
 - `frontend/`：本机运行环境（Vue），处理交互展示
-- `remote_inference_server.py`：部署在服务器（Linux）的推理引擎
+- `server/remote_inference_server.py`：部署在服务器（Linux）的推理引擎
 - `server/remote_realtime_inference_server.py`：部署在服务器（Linux）的实时推理引擎
 - `REMOTE_INFERENCE_GUIDE.md`：详细的分布式部署配置指导
 

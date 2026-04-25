@@ -38,16 +38,16 @@
 
 ```python
 # 修改为服务器上项目绝对路径
-PROJECT_ROOT = "/home/user/VideoMambaPro"
+PROJECT_ROOT = "/home/user/Project"
 
 # 修改为服务器上 checkpoint 绝对路径
-CHECKPOINT_PATH = "/home/user/VideoMambaPro/checkpoints/checkpoint-best.pth"
+CHECKPOINT_PATH = "/home/user/Project/checkpoints/checkpoint-best.pth"
 ```
 
 3. 安装依赖（在服务器模型环境）：
 
 ```bash
-conda activate VideoMamba
+conda activate YourEnv
 pip install torch torchvision opencv-python numpy
 ```
 
@@ -300,7 +300,7 @@ curl -X POST "http://127.0.0.1:9001/realtime/predict-frame" \
 1. 服务器启动：
 
 ```bash
-conda activate VideoMamba
+conda activate YourEnv
 python remote_inference_server.py
 python remote_realtime_inference_server.py
 ```
@@ -312,7 +312,6 @@ ssh -N -L 9000:localhost:9000 -L 9001:localhost:9001 your_username@server_ip
 ```
 
 3. 本机启动后端与前端。
-
 4. 分链路验证：
 
 - 上传识别链路：`/predict` 与 `/render_expert_video`
