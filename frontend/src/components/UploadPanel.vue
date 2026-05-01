@@ -73,8 +73,8 @@ function stageClass(index) {
 watch(
   () => props.initialFile,
   (file) => {
-    if (file && file !== selectedFile.value) {
-      selectedFile.value = file
+    if (file !== selectedFile.value) {
+      selectedFile.value = file || null
     }
   },
   { immediate: true }
@@ -128,7 +128,7 @@ function submit() {
 <template>
   <section class="upload-panel">
     <h2>上传微动作视频</h2>
-    <p>支持 MP4 / AVI / MOV / MKV，首版默认离线识别。</p>
+    <p>支持 MP4 / AVI / MOV / MKV</p>
 
     <div
       class="drop-zone"

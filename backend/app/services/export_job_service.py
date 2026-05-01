@@ -18,6 +18,26 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def _extract_video_name(job: dict[str, Any], fallback_job_id: str) -> str:
+    video_name = str(job.get("video_name") or job.get("source_filename") or "").strip()
+    if video_name:
+        return video_name
+
+    result = job.get("result")
+    if isinstance(result, dict):
+        inference = result.get("inference")
+        if isinstance(inference, dict):
+            video_name = str(inference.get("filename") or "").strip()
+            if video_name:
+                return video_name
+
+        video_name = str(result.get("filename") or "").strip()
+        if video_name:
+            return video_name
+
+    return fallback_job_id
+
+
 class ExportJobService:
     def __init__(self, max_workers: int = 2, store_path: Path | None = None) -> None:
         self._executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="render-job")
@@ -40,11 +60,17 @@ class ExportJobService:
             clean: dict[str, dict[str, Any]] = {}
             for key, val in jobs.items():
                 if isinstance(key, str) and isinstance(val, dict):
-                    clean[key] = val
+                    clean[key] = self._normalize_job(key, val)
             self._jobs = clean
         except Exception:
             # Keep service available even if local history file is malformed.
             self._jobs = {}
+
+    def _normalize_job(self, job_id: str, job: dict[str, Any]) -> dict[str, Any]:
+        normalized = dict(job)
+        normalized["job_id"] = str(normalized.get("job_id") or job_id)
+        normalized["video_name"] = _extract_video_name(normalized, normalized["job_id"])
+        return normalized
 
     def _persist_locked(self) -> None:
         payload = {"jobs": self._jobs}
@@ -56,6 +82,8 @@ class ExportJobService:
         job_id = uuid4().hex
         payload = {
             "job_id": job_id,
+            "video_name": video_path.name,
+            "source_filename": video_path.name,
             "status": "queued",
             "created_at": _utc_now_iso(),
             "started_at": None,
@@ -79,6 +107,7 @@ class ExportJobService:
             if not job:
                 return
             job.update(kwargs)
+            self._jobs[job_id] = self._normalize_job(job_id, job)
             self._persist_locked()
 
     def _run_job(self, job_id: str, video_path: Path, callback_url: str | None) -> None:
@@ -146,11 +175,11 @@ class ExportJobService:
     def get_job(self, job_id: str) -> dict[str, Any] | None:
         with self._lock:
             job = self._jobs.get(job_id)
-            return dict(job) if job else None
+            return self._normalize_job(job_id, job) if job else None
 
     def list_jobs(self, *, limit: int = 50, status: str | None = None) -> list[dict[str, Any]]:
         with self._lock:
-            jobs = [dict(v) for v in self._jobs.values()]
+            jobs = [self._normalize_job(str(v.get("job_id") or job_id), v) for job_id, v in self._jobs.items()]
 
         if status:
             jobs = [j for j in jobs if str(j.get("status")) == status]

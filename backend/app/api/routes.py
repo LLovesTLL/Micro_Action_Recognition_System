@@ -274,7 +274,7 @@ def download_remote_render(filename: str) -> StreamingResponse:
 
 @router.post("/cleanup-temp")
 def cleanup_temp_files() -> dict[str, int | str]:
-    stats = cleanup_storage_dirs(settings.upload_dir, settings.output_dir)
+    stats = cleanup_storage_dirs(settings.upload_dir)
     return {
         "status": "ok",
         "deleted_files": stats["deleted_files"],

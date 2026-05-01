@@ -1,13 +1,10 @@
 <script setup>
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import UploadPanel from '../components/UploadPanel.vue'
 import ResultDashboard from '../components/ResultDashboard.vue'
 import {
-  clearRenderJobs,
   createRenderExpertJob,
-  deleteRenderJob,
   inferVideoChunked,
-  listRenderJobs,
   pollRenderJobUntilDone
 } from '../services/api'
 
@@ -15,36 +12,259 @@ const loading = ref(false)
 const exporting = ref(false)
 const error = ref('')
 const result = ref(null)
+const historyResult = ref(null)
+const activeHistoryRecord = ref(null)
 const uploadedFile = ref(null)
 const uploadProgress = ref(0)
-const renderJobs = ref([])
-const jobsLoading = ref(false)
-const jobsClassFilter = ref('')
-const jobsClearing = ref(false)
+const historyRecords = ref([])
+const historyLoading = ref(false)
+const historyKeyword = ref('')
+const historyClearing = ref(false)
+const resultPaneRef = ref(null)
 
-function upsertRenderJob(job) {
-  if (!job?.job_id) return
-  const idx = renderJobs.value.findIndex((j) => j.job_id === job.job_id)
-  if (idx >= 0) {
-    renderJobs.value[idx] = { ...renderJobs.value[idx], ...job }
-  } else {
-    renderJobs.value.unshift(job)
+const displayedResult = computed(() => historyResult.value || result.value)
+const HISTORY_STORAGE_KEY = 'micro_action_inference_history'
+const HISTORY_FILE_DB = 'micro_action_history_files'
+const HISTORY_FILE_STORE = 'files'
+const HISTORY_TOKEN_KEY = 'micro_action_tab_token'
+const historyFileCache = new Map()
+
+const existingToken = sessionStorage.getItem(HISTORY_TOKEN_KEY)
+const historyTabToken = existingToken || `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+if (!existingToken) {
+  sessionStorage.setItem(HISTORY_TOKEN_KEY, historyTabToken)
+}
+
+let historyFileDbPromise = null
+
+function openHistoryFileDb() {
+  if (historyFileDbPromise) return historyFileDbPromise
+  historyFileDbPromise = new Promise((resolve, reject) => {
+    const req = indexedDB.open(HISTORY_FILE_DB, 1)
+    req.onupgradeneeded = () => {
+      const db = req.result
+      if (!db.objectStoreNames.contains(HISTORY_FILE_STORE)) {
+        db.createObjectStore(HISTORY_FILE_STORE, { keyPath: 'key' })
+      }
+    }
+    req.onsuccess = () => resolve(req.result)
+    req.onerror = () => reject(req.error)
+  })
+  return historyFileDbPromise
+}
+
+async function cleanupHistoryFilesIfNewSession() {
+  if (existingToken) return
+  try {
+    const db = await openHistoryFileDb()
+    const tx = db.transaction(HISTORY_FILE_STORE, 'readwrite')
+    const store = tx.objectStore(HISTORY_FILE_STORE)
+    const request = store.openCursor()
+    request.onsuccess = (event) => {
+      const cursor = event.target.result
+      if (!cursor) return
+      const value = cursor.value
+      if (value?.token && value.token !== historyTabToken) {
+        cursor.delete()
+      }
+      cursor.continue()
+    }
+  } catch {
+    // Best-effort cleanup.
   }
 }
 
-async function refreshRenderJobs() {
-  jobsLoading.value = true
+async function saveHistoryFile(recordId, file) {
+  if (!recordId || !file) return
   try {
-    const data = await listRenderJobs({
-      limit: 100,
-      class_label: jobsClassFilter.value || undefined
+    const db = await openHistoryFileDb()
+    const tx = db.transaction(HISTORY_FILE_STORE, 'readwrite')
+    tx.objectStore(HISTORY_FILE_STORE).put({
+      key: `${historyTabToken}:${recordId}`,
+      token: historyTabToken,
+      record_id: recordId,
+      name: file.name,
+      type: file.type,
+      size: file.size,
+      blob: file
     })
-    renderJobs.value = Array.isArray(data?.items) ? data.items : []
   } catch {
-    // no-op; avoid noisy errors for polling-style refresh
-  } finally {
-    jobsLoading.value = false
+    // Best-effort cache.
   }
+}
+
+async function loadHistoryFile(recordId) {
+  if (!recordId) return null
+  try {
+    const db = await openHistoryFileDb()
+    const tx = db.transaction(HISTORY_FILE_STORE, 'readonly')
+    const store = tx.objectStore(HISTORY_FILE_STORE)
+    const req = store.get(`${historyTabToken}:${recordId}`)
+    return await new Promise((resolve) => {
+      req.onsuccess = () => resolve(req.result?.blob || null)
+      req.onerror = () => resolve(null)
+    })
+  } catch {
+    return null
+  }
+}
+
+async function removeHistoryFile(recordId) {
+  if (!recordId) return
+  try {
+    const db = await openHistoryFileDb()
+    const tx = db.transaction(HISTORY_FILE_STORE, 'readwrite')
+    tx.objectStore(HISTORY_FILE_STORE).delete(`${historyTabToken}:${recordId}`)
+  } catch {
+    // Best-effort removal.
+  }
+}
+
+async function clearHistoryFiles() {
+  try {
+    const db = await openHistoryFileDb()
+    const tx = db.transaction(HISTORY_FILE_STORE, 'readwrite')
+    const store = tx.objectStore(HISTORY_FILE_STORE)
+    const request = store.openCursor()
+    request.onsuccess = (event) => {
+      const cursor = event.target.result
+      if (!cursor) return
+      const value = cursor.value
+      if (value?.token === historyTabToken) {
+        cursor.delete()
+      }
+      cursor.continue()
+    }
+  } catch {
+    // Best-effort removal.
+  }
+}
+
+function toLocalISOString(date) {
+  const d = date instanceof Date ? date : new Date(date)
+  if (Number.isNaN(d.getTime())) return null
+  return d.toISOString()
+}
+
+function loadHistoryRecords() {
+  try {
+    const raw = sessionStorage.getItem(HISTORY_STORAGE_KEY)
+    const parsed = raw ? JSON.parse(raw) : []
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+function persistHistoryRecords(items) {
+  try {
+    sessionStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(items))
+  } catch {
+    // Best-effort persistence.
+  }
+}
+
+function refreshHistoryRecords() {
+  historyLoading.value = true
+  const items = loadHistoryRecords()
+  const keyword = historyKeyword.value.trim().toLowerCase()
+  const filtered = keyword
+    ? items.filter((item) => {
+        const name = String(item.video_name || '').toLowerCase()
+        const label = String(item.class_label || '').toLowerCase()
+        return name.includes(keyword) || label.includes(keyword)
+      })
+    : items
+  historyRecords.value = filtered
+  historyLoading.value = false
+}
+
+function addHistoryRecord({
+  videoName,
+  status,
+  startedAt,
+  finishedAt,
+  resultPayload,
+  errorMessage,
+  sourceFile
+}) {
+  const record = {
+    record_id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    video_name: videoName,
+    status,
+    class_label: resultPayload?.top_class || null,
+    started_at: toLocalISOString(startedAt),
+    finished_at: toLocalISOString(finishedAt),
+    result: resultPayload || null,
+    error: errorMessage || null,
+    export_result: null,
+    has_source_file: Boolean(sourceFile)
+  }
+
+  const next = [record, ...loadHistoryRecords()]
+  persistHistoryRecords(next)
+  refreshHistoryRecords()
+  if (sourceFile) {
+    historyFileCache.set(record.record_id, sourceFile)
+    saveHistoryFile(record.record_id, sourceFile)
+  }
+  return record
+}
+
+function updateHistoryRecord(recordId, updater) {
+  const items = loadHistoryRecords()
+  const idx = items.findIndex((item) => item.record_id === recordId)
+  if (idx < 0) return null
+  const current = items[idx]
+  const nextItem = typeof updater === 'function' ? updater(current) : { ...current, ...updater }
+  if (current.has_source_file) {
+    nextItem.has_source_file = true
+  }
+  items[idx] = nextItem
+  persistHistoryRecords(items)
+  refreshHistoryRecords()
+  if (activeHistoryRecord.value?.record_id === recordId) {
+    activeHistoryRecord.value = nextItem
+  }
+  return nextItem
+}
+
+function resolveVideoName(record) {
+  return (
+    record?.video_name ||
+    record?.result?.filename ||
+    record?.result?.inference?.filename ||
+    record?.class_label ||
+    record?.record_id ||
+    '-'
+  )
+}
+
+function resolveHistoryResult(record) {
+  if (record?.result && typeof record.result === 'object') {
+    return record.result
+  }
+  return null
+}
+
+async function viewHistoryDetail(record) {
+  const detail = resolveHistoryResult(record)
+  if (!detail) {
+    error.value = '该记录暂无可查看的识别结果'
+    return
+  }
+
+  activeHistoryRecord.value = record
+  historyResult.value = detail
+  uploadedFile.value = null
+  await nextTick()
+  resultPaneRef.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
+
+async function clearHistoryDetail() {
+  activeHistoryRecord.value = null
+  historyResult.value = null
+  await nextTick()
 }
 
 async function onSubmit(file) {
@@ -52,10 +272,23 @@ async function onSubmit(file) {
   uploadProgress.value = 0
   error.value = ''
   uploadedFile.value = file
+  historyResult.value = null
+  activeHistoryRecord.value = null
+  const startedAt = new Date()
 
   try {
     result.value = await inferVideoChunked(file, (p) => {
       uploadProgress.value = p
+    })
+    const finishedAt = new Date()
+    addHistoryRecord({
+      videoName: file?.name || result.value?.filename || 'unknown',
+      status: 'success',
+      startedAt,
+      finishedAt,
+      resultPayload: result.value,
+      errorMessage: null,
+      sourceFile: file
     })
   } catch (err) {
     if (err?.message === 'Network Error') {
@@ -66,6 +299,17 @@ async function onSubmit(file) {
       const message = err?.response?.data?.detail || err?.message || '识别失败'
       error.value = String(message)
     }
+
+    const finishedAt = new Date()
+    addHistoryRecord({
+      videoName: file?.name || 'unknown',
+      status: 'error',
+      startedAt,
+      finishedAt,
+      resultPayload: null,
+      errorMessage: error.value,
+      sourceFile: file
+    })
   } finally {
     uploadProgress.value = 0
     loading.value = false
@@ -73,14 +317,31 @@ async function onSubmit(file) {
 }
 
 async function onExportExpertVideo() {
+  const historyId = activeHistoryRecord.value?.record_id
+  if (historyId) {
+    let cachedFile = historyFileCache.get(historyId)
+    if (!cachedFile) {
+      cachedFile = await loadHistoryFile(historyId)
+      if (cachedFile) {
+        historyFileCache.set(historyId, cachedFile)
+      }
+    }
+    if (!cachedFile) {
+      error.value = '历史记录缺少原始视频文件，无法导出。请重新上传该视频后再导出。'
+      return
+    }
+    await startExportJob(cachedFile, historyId)
+    return
+  }
+
   if (!uploadedFile.value) {
     error.value = '缺少原始视频文件，请重新上传后再导出。'
     return
   }
-  await startExportJob(uploadedFile.value)
+  await startExportJob(uploadedFile.value, null)
 }
 
-async function startExportJob(file) {
+async function startExportJob(file, historyRecordId) {
   if (!file) {
     error.value = '缺少原始视频文件，请重新上传后再导出。'
     return
@@ -94,54 +355,69 @@ async function startExportJob(file) {
     if (!jobId) {
       throw new Error('导出任务创建失败，未返回 job_id')
     }
-    upsertRenderJob({
-      job_id: jobId,
-      status: created?.job_status || 'queued',
-      created_at: created?.created_at,
-      progress: 0
-    })
 
-    const finalJob = await pollRenderJobUntilDone(jobId, {
-      onProgress: (job) => {
-        upsertRenderJob(job)
-      }
-    })
+    const finalJob = await pollRenderJobUntilDone(jobId)
     const data = finalJob?.result
     if (!data?.local_download_url) {
       throw new Error('导出完成但未返回下载地址')
     }
 
-    upsertRenderJob(finalJob)
     window.open(data.local_download_url, '_blank')
-    await refreshRenderJobs()
+    if (historyRecordId) {
+      updateHistoryRecord(historyRecordId, (current) => ({
+        ...current,
+        export_result: data
+      }))
+    }
   } catch (err) {
     const message = err?.response?.data?.detail || err?.message || '导出失败'
     error.value = String(message)
-    await refreshRenderJobs()
   } finally {
     exporting.value = false
   }
 }
 
-async function retryRenderJob() {
-  if (!uploadedFile.value) {
-    error.value = '无法重试：当前会话缺少原始视频，请重新上传后再导出。'
-    return
-  }
-  await startExportJob(uploadedFile.value)
+function canDownloadRecord(record) {
+  if (!record?.record_id) return false
+  return Boolean(record?.export_result?.local_download_url || record?.has_source_file)
 }
 
-function downloadFromJob(job) {
-  const url = job?.result?.local_download_url
-  if (!url) return
-  window.open(url, '_blank')
+async function downloadFromRecord(record) {
+  const url = record?.export_result?.local_download_url
+  if (url) {
+    window.open(url, '_blank')
+    return
+  }
+
+  const recordId = record?.record_id
+  let cachedFile = recordId ? historyFileCache.get(recordId) : null
+  if (!cachedFile && recordId) {
+    cachedFile = await loadHistoryFile(recordId)
+    if (cachedFile) {
+      historyFileCache.set(recordId, cachedFile)
+    }
+  }
+  if (!cachedFile) {
+    error.value = '该历史记录缺少原始视频文件，无法导出下载。'
+    return
+  }
+
+  await startExportJob(cachedFile, recordId)
 }
 
 function formatTimeLocal(iso) {
   if (!iso) return '-'
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return String(iso)
-  return d.toLocaleString('zh-CN', { hour12: false })
+  return d.toLocaleString('zh-CN', {
+    hour12: false,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  })
 }
 
 function formatDurationSec(startIso, endIso) {
@@ -152,43 +428,28 @@ function formatDurationSec(startIso, endIso) {
   return `${((e - s) / 1000).toFixed(2)}s`
 }
 
-async function removeJob(job) {
-  if (!job?.job_id) return
-
-  try {
-    await deleteRenderJob(job.job_id, { force: false })
-    renderJobs.value = renderJobs.value.filter((j) => j.job_id !== job.job_id)
-  } catch (err) {
-    const detail = err?.response?.data?.detail || ''
-    if (String(detail).includes('active job')) {
-      const forceDelete = window.confirm('该任务正在排队/执行中。是否强制删除？')
-      if (!forceDelete) return
-      try {
-        await deleteRenderJob(job.job_id, { force: true })
-        renderJobs.value = renderJobs.value.filter((j) => j.job_id !== job.job_id)
-      } catch (err2) {
-        error.value = String(err2?.response?.data?.detail || err2?.message || '删除任务失败')
-      }
-      return
-    }
-
-    error.value = String(detail || err?.message || '删除任务失败')
+function removeHistoryRecord(record) {
+  if (!record?.record_id) return
+  const next = loadHistoryRecords().filter((item) => item.record_id !== record.record_id)
+  persistHistoryRecords(next)
+  historyFileCache.delete(record.record_id)
+  removeHistoryFile(record.record_id)
+  refreshHistoryRecords()
+  if (activeHistoryRecord.value?.record_id === record.record_id) {
+    clearHistoryDetail()
   }
 }
 
-async function clearJobsHistory() {
-  const confirmed = window.confirm('确定清空历史任务吗？默认会保留正在排队/执行中的任务。')
+function clearHistoryRecords() {
+  const confirmed = window.confirm('确定清空历史推理记录吗？刷新页面不会清空，关闭页面才会自动释放。')
   if (!confirmed) return
-
-  jobsClearing.value = true
-  try {
-    await clearRenderJobs({ force: false })
-    await refreshRenderJobs()
-  } catch (err) {
-    error.value = String(err?.response?.data?.detail || err?.message || '清空历史失败')
-  } finally {
-    jobsClearing.value = false
-  }
+  historyClearing.value = true
+  persistHistoryRecords([])
+  historyFileCache.clear()
+  clearHistoryFiles()
+  refreshHistoryRecords()
+  historyClearing.value = false
+  clearHistoryDetail()
 }
 
 function cleanupTempOnExit() {
@@ -212,12 +473,12 @@ function cleanupTempOnExit() {
 
 onMounted(() => {
   window.addEventListener('beforeunload', cleanupTempOnExit)
-  refreshRenderJobs()
+  cleanupHistoryFilesIfNewSession()
+  refreshHistoryRecords()
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('beforeunload', cleanupTempOnExit)
-  cleanupTempOnExit()
 })
 </script>
 
@@ -227,19 +488,27 @@ onBeforeUnmount(() => {
       <h1>微动作识别系统 · 视频上传</h1>
     </header>
 
-    <section v-if="result" class="workspace split">
+    <section v-if="displayedResult" class="workspace split">
       <aside class="left-pane">
         <UploadPanel
-          :initial-file="uploadedFile"
+          :initial-file="historyResult ? null : uploadedFile"
           :uploading="loading"
           :upload-progress="uploadProgress"
           @submit="onSubmit"
         />
       </aside>
-      <section class="right-pane">
+      <section ref="resultPaneRef" class="right-pane">
+        <div v-if="historyResult" class="history-banner">
+          <div>
+            <strong>正在查看历史推理结果</strong>
+            <span> · {{ resolveVideoName(activeHistoryRecord) }}</span>
+          </div>
+          <button class="jobs-btn" @click="clearHistoryDetail">返回当前结果</button>
+        </div>
         <ResultDashboard
-          :result="result"
+          :result="displayedResult"
           :exporting="exporting"
+          :show-export-action="true"
           @export-expert-video="onExportExpertVideo"
         />
       </section>
@@ -247,7 +516,7 @@ onBeforeUnmount(() => {
 
     <section v-else class="workspace centered">
       <UploadPanel
-        :initial-file="uploadedFile"
+        :initial-file="historyResult ? null : uploadedFile"
         :uploading="loading"
         :upload-progress="uploadProgress"
         @submit="onSubmit"
@@ -258,30 +527,29 @@ onBeforeUnmount(() => {
 
     <section class="jobs-card">
       <header class="jobs-head">
-        <h2>导出任务</h2>
+        <h2>历史推理记录</h2>
         <div class="jobs-actions">
           <input
-            v-model.trim="jobsClassFilter"
+            v-model.trim="historyKeyword"
             class="jobs-filter"
-            placeholder="按类别筛选，例如 nodding"
-            @keyup.enter="refreshRenderJobs"
+            placeholder="按视频名或类别筛选"
+            @keyup.enter="refreshHistoryRecords"
           />
-          <button class="jobs-btn" :disabled="jobsLoading" @click="refreshRenderJobs">刷新任务</button>
-          <button class="jobs-btn" :disabled="exporting" @click="retryRenderJob">重试导出</button>
-          <button class="jobs-btn danger" :disabled="jobsClearing" @click="clearJobsHistory">
-            {{ jobsClearing ? '清理中...' : '清空历史' }}
+          <button class="jobs-btn" :disabled="historyLoading" @click="refreshHistoryRecords">刷新记录</button>
+          <button class="jobs-btn danger" :disabled="historyClearing" @click="clearHistoryRecords">
+            {{ historyClearing ? '清理中...' : '清空历史' }}
           </button>
         </div>
       </header>
 
-      <p v-if="jobsLoading" class="jobs-meta">正在加载任务列表...</p>
-      <p v-else class="jobs-meta">最近 {{ renderJobs.length }} 条任务</p>
+      <p v-if="historyLoading" class="jobs-meta">正在加载记录列表...</p>
+      <p v-else class="jobs-meta">最近 {{ historyRecords.length }} 条记录</p>
 
       <div class="jobs-table-wrap">
         <table class="jobs-table">
           <thead>
             <tr>
-              <th>任务ID</th>
+              <th>视频名称</th>
               <th>状态</th>
               <th>类别</th>
               <th>开始时间</th>
@@ -292,25 +560,34 @@ onBeforeUnmount(() => {
             </tr>
           </thead>
           <tbody>
-            <tr v-for="job in renderJobs" :key="job.job_id">
-              <td class="mono">{{ job.job_id }}</td>
+            <tr v-for="record in historyRecords" :key="record.record_id">
+              <td class="mono">{{ resolveVideoName(record) }}</td>
               <td>
-                <span class="status-pill" :class="`s-${job.status || 'queued'}`">
-                  {{ job.status || 'queued' }}
+                <span class="status-pill" :class="`s-${record.status || 'success'}`">
+                  {{ record.status || 'success' }}
                 </span>
               </td>
-              <td>{{ job.class_label || '-' }}</td>
-              <td>{{ formatTimeLocal(job.started_at) }}</td>
-              <td>{{ formatTimeLocal(job.finished_at) }}</td>
-              <td>{{ formatDurationSec(job.started_at, job.finished_at) }}</td>
-              <td class="err-col">{{ job.error || '-' }}</td>
+              <td>{{ record.class_label || '-' }}</td>
+              <td>{{ formatTimeLocal(record.started_at) }}</td>
+              <td>{{ formatTimeLocal(record.finished_at) }}</td>
+              <td>{{ formatDurationSec(record.started_at, record.finished_at) }}</td>
+              <td class="err-col">{{ record.error || '-' }}</td>
               <td>
-                <button class="jobs-btn" :disabled="!job.result?.local_download_url" @click="downloadFromJob(job)">下载</button>
-                <button class="jobs-btn danger" @click="removeJob(job)">删除</button>
+                <button class="jobs-btn" :disabled="!resolveHistoryResult(record)" @click="viewHistoryDetail(record)">
+                  查看详细结果
+                </button>
+                <button
+                  class="jobs-btn"
+                  :disabled="!canDownloadRecord(record)"
+                  @click="downloadFromRecord(record)"
+                >
+                  下载
+                </button>
+                <button class="jobs-btn danger" @click="removeHistoryRecord(record)">删除</button>
               </td>
             </tr>
-            <tr v-if="!renderJobs.length">
-              <td colspan="8">暂无导出任务</td>
+            <tr v-if="!historyRecords.length">
+              <td colspan="8">暂无历史推理记录</td>
             </tr>
           </tbody>
         </table>
@@ -390,6 +667,19 @@ h1 {
 .state-card.error {
   border-color: rgba(255, 120, 120, 0.6);
   color: #ffd7d7;
+}
+
+.history-banner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(111, 214, 255, 0.28);
+  background: linear-gradient(135deg, rgba(17, 31, 46, 0.95), rgba(14, 22, 34, 0.95));
+  color: #d8f0ff;
 }
 
 .jobs-card {

@@ -28,12 +28,12 @@ def health_check() -> dict[str, str]:
 
 @app.on_event("startup")
 def cleanup_on_startup() -> None:
-    cleanup_storage_dirs(settings.upload_dir, settings.output_dir)
+    cleanup_storage_dirs(settings.upload_dir)
 
 
 @app.on_event("shutdown")
 def cleanup_on_shutdown() -> None:
-    cleanup_storage_dirs(settings.upload_dir, settings.output_dir)
+    cleanup_storage_dirs(settings.upload_dir)
 
 
 app.include_router(api_router, prefix="/api/v1", tags=["inference"])

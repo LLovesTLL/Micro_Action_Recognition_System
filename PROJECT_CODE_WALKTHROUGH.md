@@ -62,6 +62,7 @@
 - 时序曲线
 - 热图缩略图与热点框
 - 性能与来源信息
+- 推理结果进入“历史推理记录”（前端临时缓存）
 
 ## 3.2 导出链路（专家视频）
 
@@ -395,6 +396,7 @@
 说明：
 
 - 组件保持无业务耦合，只负责拿到文件并 emit
+- 当用户查看历史推理结果时，上传模块不显示当前视频预览
 
 ## 5.3 结果看板
 
@@ -435,6 +437,7 @@
 - 异步导出：createRenderExpertJob + pollRenderJobUntilDone
 - 任务管理：listRenderJobs / deleteRenderJob / clearRenderJobs
 - 实时推理：getRealtimeHealth / startRealtimeSession / sendRealtimeFrame / stopRealtimeSession
+- 历史推理记录与导出逻辑由前端 UploadWorkspace 本地维护
 
 ## 5.5 实时推理页面
 
@@ -458,6 +461,22 @@
 
 - 当前读取后端返回 RealtimeHotspot
 - 坐标为归一化比例，前端按百分比绝对定位绘制
+
+## 5.6 历史推理记录
+
+位置：frontend/src/views/UploadWorkspace.vue
+
+职责：
+
+- 识别完成后写入历史记录（视频名/类别/开始结束时间/推理结果）
+- 支持查看详情、导出专家视频、下载导出结果
+- 刷新页面保留缓存；关闭页面后释放缓存
+
+实现要点：
+
+- 记录列表存 sessionStorage
+- 原始视频文件存 IndexedDB，按会话 token 进行隔离
+- 若记录没有导出结果，点击“下载”会先触发导出，再下载
 
 ---
 

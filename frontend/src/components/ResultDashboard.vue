@@ -11,6 +11,10 @@ const props = defineProps({
   exporting: {
     type: Boolean,
     default: false
+  },
+  showExportAction: {
+    type: Boolean,
+    default: true
   }
 })
 
@@ -151,7 +155,12 @@ function hotspotBoxStyle(hs) {
     <header class="summary">
       <h2>识别结果</h2>
       <div class="tag">Top-1: {{ result.top_class }} ({{ (result.top_confidence * 100).toFixed(1) }}%)</div>
-      <button class="export-btn" :disabled="exporting" @click="emit('export-expert-video')">
+      <button
+        v-if="showExportAction"
+        class="export-btn"
+        :disabled="exporting"
+        @click="emit('export-expert-video')"
+      >
         {{ exporting ? '正在导出专家视频...' : '导出专家视频' }}
       </button>
       <p>视频时长: {{ result.duration_sec.toFixed(2) }}s</p>
