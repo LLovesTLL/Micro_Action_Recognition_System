@@ -301,9 +301,10 @@ function hotspotBoxStyle(hs) {
 .chart-card,
 .heatmap-card {
   background: var(--panel);
-  border: 1px solid var(--line);
+  border: 1px solid rgba(15, 23, 42, 0.12);
   border-radius: 18px;
   padding: 14px;
+  box-shadow: var(--shadow);
 }
 
 .viz-row {
@@ -327,9 +328,9 @@ function hotspotBoxStyle(hs) {
 
 .tag {
   display: inline-block;
-  background: rgba(111, 214, 255, 0.16);
-  color: #bfefff;
-  border: 1px solid rgba(111, 214, 255, 0.45);
+  background: rgba(224, 242, 254, 0.92);
+  color: #075985;
+  border: 1px solid rgba(2, 132, 199, 0.2);
   border-radius: 999px;
   font-weight: 700;
   padding: 6px 12px;
@@ -339,11 +340,12 @@ function hotspotBoxStyle(hs) {
   margin-left: 10px;
   border: 0;
   border-radius: 10px;
-  background: linear-gradient(130deg, #8cffc9, #6fd6ff);
-  color: #0b2233;
+  background: linear-gradient(130deg, #0ea5e9, #0284c7);
+  color: #ffffff;
   font-weight: 700;
   padding: 6px 12px;
   cursor: pointer;
+  box-shadow: 0 10px 22px rgba(2, 132, 199, 0.18);
 }
 
 .export-btn:disabled {
@@ -352,14 +354,14 @@ function hotspotBoxStyle(hs) {
 }
 
 .note {
-  color: #ffb366;
+  color: #b45309;
 }
 
 .warn {
   margin-top: 8px;
-  color: #ffd7a8;
-  background: rgba(255, 122, 89, 0.2);
-  border: 1px solid rgba(255, 122, 89, 0.45);
+  color: #9a3412;
+  background: rgba(255, 247, 237, 0.95);
+  border: 1px solid rgba(251, 146, 60, 0.28);
   border-radius: 10px;
   padding: 8px 10px;
 }
@@ -372,7 +374,7 @@ function hotspotBoxStyle(hs) {
 }
 
 .topk-item {
-  border: 1px solid rgba(255, 255, 255, 0.22);
+  border: 1px solid rgba(148, 163, 184, 0.28);
   border-radius: 999px;
   padding: 4px 10px;
   font-size: 0.9rem;
@@ -381,7 +383,7 @@ function hotspotBoxStyle(hs) {
 svg {
   width: 100%;
   height: 190px;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.02), rgba(255, 255, 255, 0));
+  background: linear-gradient(180deg, rgba(248, 250, 252, 0.95), rgba(248, 250, 252, 0));
   border-radius: 10px;
 }
 
@@ -394,19 +396,19 @@ svg {
 }
 
 .axis-tick {
-  fill: #8ea4ba;
+  fill: #7c8aa0;
   font-size: 10px;
 }
 
 .axis-title {
-  fill: #b8cbe0;
+  fill: #516176;
   font-size: 11px;
   font-weight: 700;
 }
 
 .chart-note {
   margin: 10px 0 0;
-  color: #9eb3c8;
+  color: var(--muted);
   font-size: 0.9rem;
 }
 
@@ -428,13 +430,13 @@ figure {
 img {
   width: 100%;
   border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(148, 163, 184, 0.22);
 }
 
 figcaption {
   margin-top: 4px;
   font-size: 0.8rem;
-  color: #b8cbe0;
+  color: var(--muted);
 }
 
 .hotspot-box {

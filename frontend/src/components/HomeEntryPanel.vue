@@ -66,12 +66,13 @@ const emit = defineEmits(['enter-upload', 'enter-realtime'])
 
 .entry-card {
   text-align: left;
-  border: 1px solid var(--line);
+  border: 1px solid rgba(2, 132, 199, 0.18);
   border-radius: 18px;
   padding: 22px;
-  background: var(--panel);
-  color: #edf5ff;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 1), rgba(248, 251, 255, 0.98));
+  color: var(--text-strong);
   cursor: pointer;
+  box-shadow: 0 24px 54px rgba(15, 23, 42, 0.12);
   transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
@@ -92,17 +93,17 @@ const emit = defineEmits(['enter-upload', 'enter-realtime'])
 
 .entry-card p {
   margin: 0;
-  color: #d3e2f2;
+  color: var(--muted);
   line-height: 1.5;
 }
 
 .entry-card.upload:hover {
-  border-color: rgba(255, 179, 102, 0.58);
-  box-shadow: 0 12px 24px rgba(255, 179, 102, 0.14);
+  border-color: rgba(245, 158, 11, 0.56);
+  box-shadow: 0 16px 30px rgba(245, 158, 11, 0.16);
 }
 
 .entry-card.realtime:hover {
-  border-color: rgba(111, 214, 255, 0.58);
-  box-shadow: 0 12px 24px rgba(111, 214, 255, 0.14);
+  border-color: rgba(2, 132, 199, 0.56);
+  box-shadow: 0 16px 30px rgba(2, 132, 199, 0.16);
 }
 </style>

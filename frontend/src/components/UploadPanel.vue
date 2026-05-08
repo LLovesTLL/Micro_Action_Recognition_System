@@ -205,11 +205,12 @@ function submit() {
 <style scoped>
 .upload-panel {
   background: var(--panel);
-  border: 1px solid var(--line);
+  border: 1px solid rgba(15, 23, 42, 0.12);
   border-radius: 18px;
   padding: 16px;
   display: flex;
   flex-direction: column;
+  box-shadow: var(--shadow);
 }
 
 h2 {
@@ -222,7 +223,7 @@ p {
 }
 
 .drop-zone {
-  border: 1px dashed var(--line);
+  border: 1px dashed var(--line-strong);
   border-radius: 14px;
   min-height: 120px;
   display: grid;
@@ -239,7 +240,7 @@ p {
   border-radius: 10px;
   object-fit: cover;
   margin-bottom: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.15);
+  border: 1px solid rgba(30, 41, 59, 0.12);
 }
 
 .drop-zone.active {
@@ -269,21 +270,21 @@ p {
 .file-btn {
   flex: 0 0 auto;
   border-radius: 10px;
-  border: 1px solid rgba(111, 214, 255, 0.48);
-  background: linear-gradient(145deg, rgba(20, 46, 76, 0.92), rgba(11, 27, 47, 0.92));
-  color: #dff1ff;
+  border: 1px solid rgba(2, 132, 199, 0.42);
+  background: linear-gradient(145deg, rgba(219, 234, 254, 1), rgba(255, 251, 235, 1));
+  color: var(--text-strong);
   font-weight: 700;
   font-size: 0.92rem;
   padding: 8px 14px;
   cursor: pointer;
   transition: transform 0.18s ease, box-shadow 0.22s ease, border-color 0.22s ease;
-  box-shadow: 0 8px 20px rgba(7, 18, 34, 0.35), inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.1), inset 0 0 0 1px rgba(255, 255, 255, 0.86);
 }
 
 .file-btn:hover {
   transform: translateY(-1px);
-  border-color: rgba(111, 214, 255, 0.8);
-  box-shadow: 0 12px 24px rgba(11, 34, 58, 0.45), 0 0 0 4px rgba(111, 214, 255, 0.14);
+  border-color: rgba(2, 132, 199, 0.62);
+  box-shadow: 0 14px 28px rgba(15, 23, 42, 0.12), 0 0 0 4px rgba(2, 132, 199, 0.12);
 }
 
 .file-btn.disabled {
@@ -299,9 +300,9 @@ p {
   flex: 1;
   padding: 8px 10px;
   border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  background: rgba(5, 14, 24, 0.48);
-  color: #b7cce0;
+  border: 1px solid rgba(30, 41, 59, 0.12);
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--muted);
   font-size: 0.86rem;
   white-space: nowrap;
   overflow: hidden;
@@ -312,11 +313,12 @@ p {
   width: 100%;
   border: 0;
   border-radius: 10px;
-  background: linear-gradient(130deg, #ffb366, #ff7a59);
-  color: #28170a;
+  background: linear-gradient(130deg, #ea580c, #f59e0b);
+  color: #ffffff;
   font-weight: 700;
   padding: 10px 14px;
   cursor: pointer;
+  box-shadow: 0 12px 26px rgba(234, 88, 12, 0.2);
 }
 
 .submit-btn:disabled {
@@ -345,7 +347,7 @@ p {
 }
 
 .stage-rail-track {
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(148, 163, 184, 0.2);
 }
 
 .stage-rail-fill {
@@ -380,10 +382,10 @@ p {
   border-radius: 50%;
   display: grid;
   place-items: center;
-  border: 2px solid rgba(255, 255, 255, 0.14);
-  background: rgba(255, 255, 255, 0.04);
-  color: #8ea4ba;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+  border: 2px solid rgba(148, 163, 184, 0.22);
+  background: rgba(255, 255, 255, 0.94);
+  color: var(--muted);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.7);
   transition: all 0.25s ease;
 }
 
@@ -399,26 +401,26 @@ p {
 
 .stage-copy strong {
   font-size: 0.92rem;
-  color: #eaf3fb;
+  color: var(--text-strong);
 }
 
 .stage-copy span {
   font-size: 0.8rem;
-  color: #9eb3c8;
+  color: var(--muted);
 }
 
 .stage-item.active .stage-circle {
-  border-color: rgba(111, 214, 255, 0.95);
-  color: #dff8ff;
-  box-shadow: 0 0 0 4px rgba(111, 214, 255, 0.16), 0 10px 26px rgba(111, 214, 255, 0.16);
-  background: linear-gradient(135deg, rgba(111, 214, 255, 0.24), rgba(140, 255, 201, 0.16));
+  border-color: rgba(2, 132, 199, 0.75);
+  color: #075985;
+  box-shadow: 0 0 0 4px rgba(2, 132, 199, 0.1), 0 10px 26px rgba(2, 132, 199, 0.12);
+  background: linear-gradient(135deg, rgba(224, 242, 254, 0.98), rgba(236, 253, 245, 0.98));
 }
 
 .stage-item.done .stage-circle {
-  border-color: rgba(140, 255, 201, 0.95);
-  color: #163124;
-  background: linear-gradient(135deg, #8cffc9, #6fd6ff);
-  box-shadow: 0 0 0 4px rgba(140, 255, 201, 0.12);
+  border-color: rgba(16, 185, 129, 0.72);
+  color: #065f46;
+  background: linear-gradient(135deg, #d1fae5, #e0f2fe);
+  box-shadow: 0 0 0 4px rgba(16, 185, 129, 0.1);
 }
 
 .stage-item.pending .stage-circle {
@@ -426,33 +428,33 @@ p {
 }
 
 .stage-item.idle .stage-circle {
-  border-color: rgba(255, 179, 102, 0.55);
-  color: #ffd7a8;
+  border-color: rgba(245, 158, 11, 0.45);
+  color: #b45309;
 }
 
 .stage-current {
   border-radius: 14px;
   padding: 10px 12px;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(30, 41, 59, 0.08);
   display: grid;
   gap: 2px;
 }
 
 .stage-current-label {
   font-size: 0.78rem;
-  color: #9eb3c8;
+  color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 0.08em;
 }
 
 .stage-current strong {
   font-size: 0.98rem;
-  color: #edf5ff;
+  color: var(--text-strong);
 }
 
 .stage-current span:last-child {
   font-size: 0.82rem;
-  color: #c5d8eb;
+  color: var(--muted);
 }
 </style>

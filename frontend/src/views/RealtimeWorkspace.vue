@@ -460,9 +460,10 @@ onBeforeUnmount(() => {
 .camera-panel,
 .result-panel {
   background: var(--panel);
-  border: 1px solid var(--line);
+  border: 1px solid rgba(15, 23, 42, 0.14);
   border-radius: 16px;
   padding: 14px;
+  box-shadow: 0 22px 52px rgba(15, 23, 42, 0.1);
 }
 
 .panel-head {
@@ -479,16 +480,16 @@ onBeforeUnmount(() => {
 
 .panel-head p {
   margin: 4px 0 0;
-  color: #a8bdd0;
+  color: var(--muted);
   font-size: 0.92rem;
 }
 
 .live-pill {
   padding: 6px 10px;
   border-radius: 999px;
-  background: rgba(111, 214, 255, 0.14);
-  border: 1px solid rgba(111, 214, 255, 0.32);
-  color: #bfefff;
+  background: rgba(224, 242, 254, 0.9);
+  border: 1px solid rgba(2, 132, 199, 0.18);
+  color: #075985;
   font-size: 0.82rem;
 }
 
@@ -496,14 +497,14 @@ onBeforeUnmount(() => {
   margin-top: 12px;
   padding: 14px;
   border-radius: 18px;
-  background: linear-gradient(135deg, rgba(255, 122, 89, 0.22), rgba(111, 214, 255, 0.14));
-  border: 1px solid rgba(255, 179, 102, 0.28);
-  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.18);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 1), rgba(241, 245, 249, 0.98));
+  border: 1px solid rgba(15, 23, 42, 0.14);
+  box-shadow: 0 18px 44px rgba(15, 23, 42, 0.08);
 }
 
 .top1-label {
-  color: #ffd7a8;
-  font-size: 0.76rem;
+  color: #b45309;
+  font-size: 1.0rem;
   letter-spacing: 0.14em;
   text-transform: uppercase;
 }
@@ -535,7 +536,7 @@ onBeforeUnmount(() => {
 
 .top1-meta p {
   margin: 0;
-  color: #edf5ff;
+  color: var(--text-strong);
 }
 
 .ring-chart {
@@ -551,7 +552,7 @@ onBeforeUnmount(() => {
 }
 
 .ring-track {
-  stroke: rgba(255, 255, 255, 0.1);
+  stroke: rgba(148, 163, 184, 0.28);
 }
 
 .ring-progress.confidence {
@@ -562,7 +563,7 @@ onBeforeUnmount(() => {
 .ring-value,
 .ring-label {
   transform: rotate(90deg);
-  fill: #edf5ff;
+  fill: var(--text-strong);
 }
 
 .ring-value {
@@ -572,7 +573,7 @@ onBeforeUnmount(() => {
 
 .ring-label {
   font-size: 11px;
-  fill: #c5d8eb;
+  fill: var(--muted);
 }
 
 .metric-grid {
@@ -591,13 +592,14 @@ onBeforeUnmount(() => {
 .metric-card {
   border-radius: 14px;
   padding: 10px 12px;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.98);
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.05);
 }
 
 .metric-card span {
   display: block;
-  color: #a8bdd0;
+  color: var(--muted);
   font-size: 0.82rem;
 }
 
@@ -608,18 +610,20 @@ onBeforeUnmount(() => {
 }
 
 .metric-card.warm {
-  background: linear-gradient(135deg, rgba(255, 122, 89, 0.2), rgba(255, 179, 102, 0.08));
+  background: linear-gradient(135deg, rgba(255, 247, 237, 1), rgba(254, 215, 170, 0.28));
+  border-color: rgba(245, 158, 11, 0.22);
 }
 
 .metric-card.cool {
-  background: linear-gradient(135deg, rgba(111, 214, 255, 0.16), rgba(140, 255, 201, 0.08));
+  background: linear-gradient(135deg, rgba(239, 246, 255, 1), rgba(224, 242, 254, 0.9));
+  border-color: rgba(2, 132, 199, 0.22);
 }
 
 .bar-track {
   margin-top: 8px;
   height: 8px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(148, 163, 184, 0.24);
   overflow: hidden;
 }
 
@@ -647,11 +651,11 @@ onBeforeUnmount(() => {
 }
 
 .sparkline-line.latency {
-  stroke: #ffb366;
+  stroke: #ea580c;
 }
 
 .sparkline-line.confidence {
-  stroke: #8cffc9;
+  stroke: #059669;
 }
 
 .camera-toolbar {
@@ -662,9 +666,9 @@ onBeforeUnmount(() => {
 .camera-toolbar select {
   margin-left: 8px;
   border-radius: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  background: rgba(0, 0, 0, 0.2);
-  color: #e9f1ff;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--text-strong);
   padding: 3px 8px;
 }
 
@@ -675,12 +679,13 @@ onBeforeUnmount(() => {
 }
 
 .btn {
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  background: rgba(255, 255, 255, 0.06);
-  color: #e8f4ff;
+  border: 1px solid rgba(2, 132, 199, 0.28);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 1), rgba(235, 245, 255, 0.98));
+  color: var(--text-strong);
   border-radius: 10px;
   padding: 7px 12px;
   cursor: pointer;
+  box-shadow: 0 10px 20px rgba(15, 23, 42, 0.08);
 }
 
 .btn:disabled {
@@ -689,21 +694,24 @@ onBeforeUnmount(() => {
 }
 
 .btn.primary {
-  border-color: rgba(111, 214, 255, 0.6);
-  background: linear-gradient(130deg, rgba(111, 214, 255, 0.3), rgba(76, 186, 233, 0.35));
+  border-color: rgba(2, 143, 199, 0.5);
+  background: linear-gradient(130deg, rgba(14, 165, 233, 1), rgba(2, 132, 199, 1));
+  color: #ffffff;
+  box-shadow: 0 12px 24px rgba(2, 132, 199, 0.22);
 }
 
 .btn.danger {
-  border-color: rgba(255, 122, 89, 0.5);
-  background: rgba(255, 122, 89, 0.17);
+  border-color: rgba(239, 68, 68, 0.34);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 1), rgba(254, 242, 242, 0.98));
+  color: #b91c1c;
 }
 
 .camera-frame {
   margin-top: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.16);
+  border: 1px solid rgba(148, 163, 184, 0.22);
   border-radius: 12px;
   overflow: hidden;
-  background: rgba(3, 8, 14, 0.75);
+  background: rgba(255, 255, 255, 0.92);
   position: relative;
 }
 
@@ -728,22 +736,22 @@ onBeforeUnmount(() => {
 
 .status {
   margin: 10px 0 0;
-  color: #d4e6f8;
+  color: var(--text);
 }
 
 .error {
-  color: #ffd0d0;
+  color: #b91c1c;
 }
 
 .hotspot-meta {
   margin: 6px 0 0;
-  color: #ffd7d7;
+  color: #b91c1c;
   font-size: 0.9rem;
 }
 
 .topk-box {
   margin-top: 8px;
-  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  border-top: 1px solid rgba(148, 163, 184, 0.18);
   padding-top: 8px;
 }
 

@@ -657,16 +657,17 @@ h1 {
 
 .state-card {
   background: var(--panel);
-  border: 1px solid var(--line);
+  border: 1px solid rgba(15, 23, 42, 0.12);
   border-radius: 14px;
   padding: 14px;
   width: 100%;
   box-sizing: border-box;
+  box-shadow: var(--shadow);
 }
 
 .state-card.error {
-  border-color: rgba(255, 120, 120, 0.6);
-  color: #ffd7d7;
+  border-color: rgba(239, 68, 68, 0.28);
+  color: #991b1b;
 }
 
 .history-banner {
@@ -677,16 +678,17 @@ h1 {
   margin-bottom: 10px;
   padding: 10px 12px;
   border-radius: 12px;
-  border: 1px solid rgba(111, 214, 255, 0.28);
-  background: linear-gradient(135deg, rgba(17, 31, 46, 0.95), rgba(14, 22, 34, 0.95));
-  color: #d8f0ff;
+  border: 1px solid rgba(2, 132, 199, 0.18);
+  background: linear-gradient(135deg, rgba(224, 242, 254, 0.9), rgba(255, 247, 237, 0.9));
+  color: #0f172a;
 }
 
 .jobs-card {
   background: var(--panel);
-  border: 1px solid var(--line);
+  border: 1px solid rgba(15, 23, 42, 0.12);
   border-radius: 14px;
   padding: 12px;
+  box-shadow: var(--shadow);
 }
 
 .jobs-head {
@@ -708,20 +710,21 @@ h1 {
 
 .jobs-filter {
   min-width: 220px;
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  background: rgba(7, 16, 26, 0.8);
-  color: #deedff;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--text-strong);
   border-radius: 8px;
   padding: 4px 8px;
 }
 
 .jobs-btn {
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  background: rgba(255, 255, 255, 0.06);
-  color: #e8f4ff;
+  border: 1px solid rgba(2, 132, 199, 0.28);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 1), rgba(235, 244, 253, 0.98));
+  color: var(--text-strong);
   border-radius: 8px;
   padding: 4px 10px;
   cursor: pointer;
+  box-shadow: 0 10px 20px rgba(15, 23, 42, 0.08);
 }
 
 .jobs-btn:disabled {
@@ -730,14 +733,14 @@ h1 {
 }
 
 .jobs-btn.danger {
-  border-color: rgba(255, 122, 89, 0.45);
-  background: rgba(255, 122, 89, 0.16);
-  color: #ffd8ce;
+  border-color: rgba(239, 68, 68, 0.34);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 1), rgba(254, 242, 242, 0.98));
+  color: #b91c1c;
 }
 
 .jobs-meta {
   margin: 10px 0 6px;
-  color: #cbd9e8;
+  color: var(--muted);
 }
 
 .jobs-table-wrap {
@@ -752,7 +755,7 @@ h1 {
 
 .jobs-table th,
 .jobs-table td {
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
   padding: 8px 6px;
   text-align: left;
   font-size: 0.84rem;
