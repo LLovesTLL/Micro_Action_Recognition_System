@@ -4,6 +4,7 @@ import UploadPanel from '../components/UploadPanel.vue'
 import ResultDashboard from '../components/ResultDashboard.vue'
 import {
   createRenderExpertJob,
+  exportInferenceReport,
   inferVideoChunked,
   pollRenderJobUntilDone
 } from '../services/api'
@@ -255,7 +256,10 @@ async function viewHistoryDetail(record) {
   }
 
   activeHistoryRecord.value = record
-  historyResult.value = detail
+  historyResult.value = {
+    ...detail,
+    source_filename: detail?.source_filename || record?.video_name || null
+  }
   uploadedFile.value = null
   await nextTick()
   resultPaneRef.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
@@ -277,9 +281,13 @@ async function onSubmit(file) {
   const startedAt = new Date()
 
   try {
-    result.value = await inferVideoChunked(file, (p) => {
+    const inferenceResult = await inferVideoChunked(file, (p) => {
       uploadProgress.value = p
     })
+    result.value = {
+      ...inferenceResult,
+      source_filename: file?.name || inferenceResult?.source_filename || null
+    }
     const finishedAt = new Date()
     addHistoryRecord({
       videoName: file?.name || result.value?.filename || 'unknown',
@@ -339,6 +347,40 @@ async function onExportExpertVideo() {
     return
   }
   await startExportJob(uploadedFile.value, null)
+}
+
+async function onExportReport(reportPayload) {
+  const baseResult = reportPayload?.result || displayedResult.value
+  if (!baseResult) {
+    error.value = '当前没有可导出的识别结果'
+    return
+  }
+
+  const payload = {
+    ...baseResult,
+    source_filename: reportPayload?.source_filename || null,
+    chart_data_url: reportPayload?.chart_data_url || null,
+    heatmaps: Array.isArray(reportPayload?.heatmaps) ? reportPayload.heatmaps : []
+  }
+
+  exporting.value = true
+  error.value = ''
+  try {
+    const blob = await exportInferenceReport(payload)
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `inference_report_${Date.now()}.pdf`
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    URL.revokeObjectURL(url)
+  } catch (err) {
+    const message = err?.response?.data?.detail || err?.message || '导出报告失败'
+    error.value = String(message)
+  } finally {
+    exporting.value = false
+  }
 }
 
 async function startExportJob(file, historyRecordId) {
@@ -510,6 +552,7 @@ onBeforeUnmount(() => {
           :exporting="exporting"
           :show-export-action="true"
           @export-expert-video="onExportExpertVideo"
+          @export-report="onExportReport"
         />
       </section>
     </section>

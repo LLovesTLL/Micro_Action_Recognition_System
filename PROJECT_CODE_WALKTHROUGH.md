@@ -73,7 +73,15 @@
 5. 任务成功后返回 result.local_download_url，前端触发下载
 6. 导出任务同时进入任务历史，可在页面按类别筛选、删除与清理
 
-## 3.3 实时推理链路
+## 3.3. 导出链路（PDF 报告）
+
+1. 前端结果页点击“导出推理报告（PDF）”。
+2. `ResultDashboard` 采集当前时序曲线图与热力图路径，并通过 `export-report` 事件上抛。
+3. `UploadWorkspace` 组装导出 payload，使用上抛的 `source_filename` 作为报告视频名来源。
+4. 前端调用本地接口 `POST /api/v1/export-report`。
+5. 本地后端聚合推理结果、可视化资源并生成 PDF，返回文件流供前端下载。
+
+## 3.4 实时推理链路
 
 1. 前端主页面选择“实时推理”，进入实时页。
 2. 前端调用 POST /api/v1/realtime/session/start 创建会话，获取 session_id。
@@ -477,6 +485,7 @@
 - 记录列表存 sessionStorage
 - 原始视频文件存 IndexedDB，按会话 token 进行隔离
 - 若记录没有导出结果，点击“下载”会先触发导出，再下载
+- 查看历史详情时会补齐 `source_filename`，用于报告导出时保持原始文件名一致
 
 ---
 
@@ -607,7 +616,7 @@
 - 使用 http.server + cgi.parse_multipart
 - 无 FastAPI 依赖，部署简单
 
-## 6.8 远程实时服务 remote_realtime_inference_server.py（新增）
+## 6.8 远程实时服务 remote_realtime_inference_server.py
 
 本文件负责摄像头实时推理与低延迟优化。
 
@@ -645,6 +654,7 @@
 - local_download_url（本地代理）
 - render_meta
 - inference（完整推理结果）
+- source_filename（报告导出用原始文件名）
 
 实时核心字段：
 
@@ -698,6 +708,12 @@
 - 检查 9001 远程服务是否启动
 - 检查 SSH 是否映射 9001
 - 检查 /api/v1/realtime/health 的 remote_realtime.reachable
+
+8. 导出的 PDF 视频名显示为 `final.mp4`
+
+- 检查前端导出 payload 是否携带 `source_filename`。
+- 检查 `UploadWorkspace` 在推理成功与历史详情场景是否补齐 `source_filename`。
+- 若历史记录产生于旧版本（无 `source_filename`），建议重新推理一次生成新记录。
 
 ---
 

@@ -1,7 +1,7 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 
-const emit = defineEmits(['export-expert-video'])
+const emit = defineEmits(['export-expert-video', 'export-report'])
 
 const props = defineProps({
   result: {
@@ -30,10 +30,10 @@ const classNames = computed(() => {
     .map(([name]) => name)
 })
 
-const CHART_LEFT = 44
-const CHART_RIGHT = 690
-const CHART_TOP = 20
-const CHART_BOTTOM = 180
+const CHART_LEFT = 56
+const CHART_RIGHT = 724
+const CHART_TOP = 28
+const CHART_BOTTOM = 188
 
 function yFor(prob) {
   const p = Math.max(0, Math.min(1, Number(prob) || 0))
@@ -108,6 +108,7 @@ const curveAnnotations = computed(() => {
 })
 
 const palette = ['#ff7a59', '#ffb366', '#ffe08a', '#6fd6ff', '#8cffc9', '#ff9ecb']
+const temporalChartRef = ref(null)
 
 const yTicks = [0, 0.25, 0.5, 0.75, 1]
 
@@ -148,6 +149,68 @@ function hotspotBoxStyle(hs) {
     height: `${Math.max(1, (y2 - y1) * 100)}%`
   }
 }
+
+function serializeSvg(svgElement) {
+  if (!svgElement) return null
+  const cloned = svgElement.cloneNode(true)
+  cloned.setAttribute('xmlns', 'http://www.w3.org/2000/svg')
+  cloned.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink')
+  return new XMLSerializer().serializeToString(cloned)
+}
+
+function svgToPngDataUrl(svgMarkup) {
+  return new Promise((resolve, reject) => {
+    try {
+      const blob = new Blob([svgMarkup], { type: 'image/svg+xml;charset=utf-8' })
+      const url = URL.createObjectURL(blob)
+      const image = new Image()
+      image.onload = () => {
+        try {
+          const canvas = document.createElement('canvas')
+          const baseWidth = Math.max(1, image.naturalWidth || 700)
+          const baseHeight = Math.max(1, image.naturalHeight || 200)
+          const scale = 4
+          canvas.width = Math.max(1, Math.round(baseWidth * scale))
+          canvas.height = Math.max(1, Math.round(baseHeight * scale))
+          const context = canvas.getContext('2d')
+          context.fillStyle = '#ffffff'
+          context.fillRect(0, 0, canvas.width, canvas.height)
+          context.scale(scale, scale)
+          context.drawImage(image, 0, 0, baseWidth, baseHeight)
+          URL.revokeObjectURL(url)
+          resolve(canvas.toDataURL('image/png'))
+        } catch (error) {
+          URL.revokeObjectURL(url)
+          reject(error)
+        }
+      }
+      image.onerror = (error) => {
+        URL.revokeObjectURL(url)
+        reject(error)
+      }
+      image.src = url
+    } catch (error) {
+      reject(error)
+    }
+  })
+}
+
+async function emitReportExport() {
+  const svgMarkup = serializeSvg(temporalChartRef.value)
+  const chartDataUrl = svgMarkup ? await svgToPngDataUrl(svgMarkup) : null
+  emit('export-report', {
+    source_filename: props.result.source_filename || props.result.video_name || props.result.filename || null,
+    chart_data_url: chartDataUrl,
+    heatmaps: Array.isArray(props.result.heatmaps)
+      ? props.result.heatmaps.map((item) => ({
+          heatmap_path: item.heatmap_path,
+          t: item.t,
+          hotspot: item.hotspot || null
+        }))
+      : [],
+    result: props.result
+  })
+}
 </script>
 
 <template>
@@ -155,14 +218,22 @@ function hotspotBoxStyle(hs) {
     <header class="summary">
       <h2>识别结果</h2>
       <div class="tag">Top-1: {{ result.top_class }} ({{ (result.top_confidence * 100).toFixed(1) }}%)</div>
-      <button
-        v-if="showExportAction"
-        class="export-btn"
-        :disabled="exporting"
-        @click="emit('export-expert-video')"
-      >
-        {{ exporting ? '正在导出专家视频...' : '导出专家视频' }}
-      </button>
+          <button
+            v-if="showExportAction"
+            class="export-btn"
+            :disabled="exporting"
+            @click="emit('export-expert-video')"
+          >
+            {{ exporting ? '正在导出专家视频...' : '导出专家视频' }}
+          </button>
+          <button
+            v-if="showExportAction"
+            class="export-btn"
+            :disabled="exporting"
+            @click="emitReportExport"
+          >
+            {{ exporting ? '正在导出报告...' : '导出推理报告 (PDF)' }}
+          </button>
       <p>视频时长: {{ result.duration_sec.toFixed(2) }}s</p>
       <p v-if="result.remote_device">远端设备: {{ result.remote_device }}</p>
       <p v-if="result.attention_source">注意力来源: {{ result.attention_source }}</p>
@@ -191,7 +262,7 @@ function hotspotBoxStyle(hs) {
     <section class="viz-row">
       <article class="chart-card" v-if="result.temporal_probs?.length">
         <h3>时序概率曲线（Top-K）</h3>
-        <svg viewBox="0 0 700 200" preserveAspectRatio="none">
+        <svg ref="temporalChartRef" viewBox="0 0 760 240" preserveAspectRatio="none">
         <line
           v-for="tick in yTicks"
           :key="`y-grid-${tick}`"
@@ -220,7 +291,7 @@ function hotspotBoxStyle(hs) {
         <text
           v-for="tick in yTicks"
           :key="`y-label-${tick}`"
-          x="38"
+          x="46"
           :y="yFor(tick) + 4"
           text-anchor="end"
           class="axis-tick"
@@ -232,15 +303,15 @@ function hotspotBoxStyle(hs) {
           v-for="tick in xTicks"
           :key="`x-label-${tick.label}`"
           :x="tick.x"
-          y="194"
+          y="220"
           text-anchor="middle"
           class="axis-tick"
         >
           {{ tick.label }}
         </text>
 
-        <text x="6" y="14" class="axis-title">概率</text>
-        <text :x="CHART_RIGHT - 2" y="194" text-anchor="end" class="axis-title">时间</text>
+        <text x="10" y="20" class="axis-title">概率</text>
+        <text :x="(CHART_LEFT + CHART_RIGHT) / 2" y="236" text-anchor="middle" class="axis-title">时间 (s)</text>
 
         <polyline
           v-for="(name, idx) in classNames"
@@ -256,7 +327,7 @@ function hotspotBoxStyle(hs) {
         <g v-for="item in curveAnnotations" :key="`anno-${item.name}`" class="curve-anno">
           <circle :cx="item.x" :cy="item.y" r="2.8" :fill="item.color" />
           <text
-            :x="Math.min(680, item.x + 8)"
+            :x="Math.min(CHART_RIGHT, item.x + 8)"
             :y="Math.max(18, item.y - 8)"
             :fill="item.color"
             class="curve-anno-text"
@@ -278,7 +349,7 @@ function hotspotBoxStyle(hs) {
       </article>
 
       <article class="heatmap-card" v-if="result.heatmaps?.length">
-        <h3>Attention 热力图（远程回传）</h3>
+        <h3>Attention 热力图</h3>
         <div class="heatmap-grid">
           <figure v-for="item in result.heatmaps" :key="item.heatmap_path">
             <img :src="item.heatmap_path" :alt="`heatmap-${item.t}`" />
@@ -382,7 +453,7 @@ function hotspotBoxStyle(hs) {
 
 svg {
   width: 100%;
-  height: 190px;
+  height: 240px;
   background: linear-gradient(180deg, rgba(248, 250, 252, 0.95), rgba(248, 250, 252, 0));
   border-radius: 10px;
 }
@@ -397,12 +468,12 @@ svg {
 
 .axis-tick {
   fill: #7c8aa0;
-  font-size: 10px;
+  font-size: 9px;
 }
 
 .axis-title {
   fill: #516176;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 700;
 }
 

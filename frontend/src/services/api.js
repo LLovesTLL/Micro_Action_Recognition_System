@@ -224,6 +224,15 @@ export async function getRealtimeHealth() {
   return data
 }
 
+export async function exportInferenceReport(result) {
+  const { data } = await api.post('/export-report', result, {
+    responseType: 'blob',
+    headers: { 'Content-Type': 'application/json' },
+    timeout: 120000
+  })
+  return data
+}
+
 export async function startRealtimeSession(mode = 'fast') {
   const { data } = await api.post('/realtime/session/start', { mode })
   return data

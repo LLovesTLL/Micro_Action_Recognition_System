@@ -15,6 +15,7 @@ from ..services.pipeline_service import run_inference_pipeline
 from ..services.realtime_service import realtime_registry
 from ..services.storage_service import cleanup_storage_dirs
 from ..services.upload_session_service import UploadSessionService
+from ..services.report_service import generate_pdf_report
 from ..schemas.realtime import (
     RealtimeFrameResponse,
     RealtimeHotspot,
@@ -288,6 +289,25 @@ def get_asset(filename: str) -> FileResponse:
     if not target.exists() or not target.is_file():
         raise HTTPException(status_code=404, detail="Asset not found.")
     return FileResponse(target)
+
+
+@router.post('/export-report')
+def export_report(payload: dict) -> FileResponse:
+    try:
+        # optional: payload may include 'source_video_path' referring to a server-side path
+        source = None
+        src = payload.get('source_video_path') if isinstance(payload, dict) else None
+        if src:
+            from pathlib import Path
+
+            p = Path(str(src))
+            if p.exists() and p.is_file():
+                source = p
+
+        pdf = generate_pdf_report(payload, source_video_path=source)
+        return FileResponse(pdf, media_type='application/pdf', filename=pdf.name)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Export report failed: {exc}") from exc
 
 
 @router.get("/realtime/health")
