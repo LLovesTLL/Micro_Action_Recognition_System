@@ -24,8 +24,8 @@ const previewUrl = ref('')
 const stages = [
   { id: 1, name: '视频准备', hint: '校验文件并建立任务' },
   { id: 2, name: '分片上传', hint: '视频切片上传到后端' },
-  { id: 3, name: '模型推理', hint: '远端 GPU 执行识别' },
-  { id: 4, name: '结果整理', hint: '生成可视化并返回结果' }
+  { id: 3, name: '动作识别', hint: '远端 GPU 执行动作识别' },
+  { id: 4, name: '情绪分析', hint: 'Gemini 分析与结果汇总' }
 ]
 
 const uploadProgressValue = computed(() => Math.max(0, Math.min(1, Number(props.uploadProgress) || 0)))
@@ -41,7 +41,7 @@ const activeStageIndex = computed(() => {
 
 const currentStage = computed(() => {
   if (!props.uploading) {
-    return { name: '等待开始识别', hint: '选择视频后点击开始识别' }
+    return { name: '等待开始分析', hint: '选择视频后点击开始分析' }
   }
   return stages[Math.max(0, Math.min(stages.length - 1, activeStageIndex.value))] || stages[0]
 })
@@ -197,7 +197,7 @@ function submit() {
     </div>
 
     <button class="submit-btn" :disabled="!selectedFile || uploading" @click="submit">
-      {{ uploading ? '上传中...' : '开始识别' }}
+      {{ uploading ? '上传中...' : '开始分析' }}
     </button>
   </section>
 </template>

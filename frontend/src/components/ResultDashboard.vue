@@ -136,6 +136,8 @@ const timingText = computed(() => {
   return [totalPart, inferPart].filter(Boolean).join(' | ')
 })
 
+const emotion = computed(() => props.result.emotion || null)
+
 function hotspotBoxStyle(hs) {
   if (!hs) return null
   const x1 = Math.max(0, Math.min(1, Number(hs.x1) || 0))
@@ -247,6 +249,18 @@ async function emitReportExport() {
       <p v-if="result.temporal_source === 'static_fallback'" class="warn">
         时序回退: 当前曲线为静态回退结果，建议检查远端 temporal_probs 生成日志。
       </p>
+
+      <div v-if="emotion" class="emotion-card">
+        <div class="emotion-head">
+          <h3>情绪分析 (Gemini)</h3>
+          <span class="emotion-pill">{{ (Number(emotion.confidence || 0) * 100).toFixed(1) }}%</span>
+        </div>
+        <p class="emotion-label">主情绪: {{ emotion.emotion_label || 'unknown' }}</p>
+        <p v-if="emotion.summary" class="emotion-summary">{{ emotion.summary }}</p>
+        <ul v-if="Array.isArray(emotion.evidence) && emotion.evidence.length" class="emotion-evidence">
+          <li v-for="(item, idx) in emotion.evidence" :key="`${idx}-${item}`">{{ item }}</li>
+        </ul>
+      </div>
 
       <div v-if="result.topk?.length" class="topk-list">
         <span
@@ -376,6 +390,56 @@ async function emitReportExport() {
   border-radius: 18px;
   padding: 14px;
   box-shadow: var(--shadow);
+}
+
+.emotion-card {
+  margin-top: 10px;
+  padding: 12px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, rgba(255, 251, 235, 1), rgba(254, 243, 199, 0.85));
+  border: 1px solid rgba(217, 119, 6, 0.28);
+  box-shadow: 0 14px 32px rgba(217, 119, 6, 0.12);
+  display: grid;
+  gap: 6px;
+}
+
+.emotion-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.emotion-head h3 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.emotion-pill {
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(251, 191, 36, 0.28);
+  border: 1px solid rgba(217, 119, 6, 0.3);
+  font-weight: 600;
+  font-size: 0.86rem;
+}
+
+.emotion-label {
+  margin: 0;
+  font-weight: 600;
+}
+
+.emotion-summary {
+  margin: 0;
+  color: var(--text-strong);
+}
+
+.emotion-evidence {
+  margin: 0;
+  padding-left: 16px;
+  color: var(--text-strong);
+  display: grid;
+  gap: 4px;
 }
 
 .viz-row {

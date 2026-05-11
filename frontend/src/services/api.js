@@ -153,6 +153,18 @@ export async function inferVideoChunked(file, onProgress) {
   }
 }
 
+export async function analyzeVideoChunked(file, onProgress) {
+  const uploaded = await uploadFileByChunks(file, onProgress)
+  try {
+    const { data } = await api.post(`/upload-sessions/${encodeURIComponent(uploaded.sessionId)}/analyze`)
+    if (typeof onProgress === 'function') onProgress(1)
+    uploaded.clear()
+    return data
+  } catch (err) {
+    throw err
+  }
+}
+
 export async function createRenderExpertJob(file, onProgress, callbackUrl = null) {
   const uploaded = await uploadFileByChunks(file, onProgress)
   try {
@@ -170,6 +182,11 @@ export async function createRenderExpertJob(file, onProgress, callbackUrl = null
 
 export async function getRenderJob(jobId) {
   const { data } = await api.get(`/render-jobs/${encodeURIComponent(jobId)}`)
+  return data
+}
+
+export async function getEmotionJob(jobId) {
+  const { data } = await api.get(`/emotion-jobs/${encodeURIComponent(jobId)}`)
   return data
 }
 
@@ -217,6 +234,30 @@ export async function pollRenderJobUntilDone(jobId, options = {}) {
   }
 
   throw new Error('导出任务超时，请稍后在服务端继续查询。')
+}
+
+export async function pollEmotionJobUntilDone(jobId, options = {}) {
+  const intervalMs = Number(options.intervalMs || 1500)
+  const timeoutMs = Number(options.timeoutMs || 20 * 60 * 1000)
+  const onProgress = options.onProgress
+
+  const start = Date.now()
+  while (Date.now() - start < timeoutMs) {
+    const job = await getEmotionJob(jobId)
+    if (typeof onProgress === 'function') {
+      onProgress(job)
+    }
+
+    if (job.status === 'success') return job
+    if (job.status === 'error') {
+      const msg = job.error || '情绪分析失败'
+      throw new Error(msg)
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, intervalMs))
+  }
+
+  throw new Error('情绪分析超时，请稍后重试。')
 }
 
 export async function getRealtimeHealth() {

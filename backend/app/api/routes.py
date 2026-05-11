@@ -10,6 +10,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from ..core.config import settings
 from ..schemas.inference import InferenceResponse, RenderExpertResponse
 from ..services.export_job_service import export_job_service
+from ..services.gemini_emotion_service import emotion_job_service
 from ..services.model_service import model_service
 from ..services.pipeline_service import run_inference_pipeline
 from ..services.realtime_service import realtime_registry
@@ -169,6 +170,37 @@ def infer_from_upload_session(session_id: str) -> InferenceResponse:
         upload_session_service.delete_session(session_id)
 
 
+@router.post("/upload-sessions/{session_id}/analyze", response_model=InferenceResponse)
+def analyze_from_upload_session(session_id: str) -> InferenceResponse:
+    target_path: Path | None = None
+    job_created = False
+    try:
+        src_status = upload_session_service.get_status(session_id)
+        ext = Path(str(src_status.get("filename") or "")).suffix.lower() or ".mp4"
+        local_id = uuid4().hex
+        target_path = settings.upload_dir / f"analysis_{local_id}{ext}"
+        upload_session_service.move_assembled_to(session_id, target_path)
+
+        inference = run_inference_pipeline(target_path)
+        job = emotion_job_service.create_job(
+            target_path,
+            top_class=inference.top_class,
+            top_confidence=inference.top_confidence,
+        )
+        job_created = True
+        return inference.model_copy(update={"emotion_job_id": job.get("job_id")})
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Upload session not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Analyze failed: {exc}") from exc
+    finally:
+        upload_session_service.delete_session(session_id)
+        if target_path and not job_created:
+            target_path.unlink(missing_ok=True)
+
+
 @router.post("/upload-sessions/{session_id}/render-expert-async")
 def render_expert_async_from_upload_session(session_id: str, payload: RenderJobCreateRequest) -> dict:
     try:
@@ -200,6 +232,14 @@ def get_render_job(job_id: str) -> dict:
     job = export_job_service.get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Render job not found")
+    return job
+
+
+@router.get("/emotion-jobs/{job_id}")
+def get_emotion_job(job_id: str) -> dict:
+    job = emotion_job_service.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Emotion job not found")
     return job
 
 

@@ -429,10 +429,10 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .rt-wrap {
-  width: min(1360px, 100%);
+  width: min(1480px, 100%);
   margin: 0 auto;
   display: grid;
-  gap: 12px;
+  gap: 14px;
 }
 
 .rt-head h1 {
@@ -447,8 +447,8 @@ onBeforeUnmount(() => {
 
 .rt-grid {
   display: grid;
-  grid-template-columns: 1.45fr 1fr;
-  gap: 12px;
+  grid-template-columns: 1.6fr 1fr;
+  gap: 14px;
 }
 
 @media (max-width: 980px) {
@@ -462,7 +462,7 @@ onBeforeUnmount(() => {
   background: var(--panel);
   border: 1px solid rgba(15, 23, 42, 0.14);
   border-radius: 16px;
-  padding: 14px;
+  padding: 16px;
   box-shadow: 0 22px 52px rgba(15, 23, 42, 0.1);
 }
 
@@ -713,6 +713,7 @@ onBeforeUnmount(() => {
   overflow: hidden;
   background: rgba(255, 255, 255, 0.92);
   position: relative;
+  min-height: 360px;
 }
 
 .camera-frame video {

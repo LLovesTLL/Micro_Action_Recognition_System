@@ -238,6 +238,49 @@ def _topk_table(styles: dict[str, ParagraphStyle], payload: dict[str, Any]) -> T
     return table
 
 
+def _extract_emotion(payload: dict[str, Any]) -> dict[str, Any] | None:
+    emotion = payload.get("emotion") or payload.get("emotion_result")
+    if isinstance(emotion, dict):
+        return emotion
+    return None
+
+
+def _emotion_table(styles: dict[str, ParagraphStyle], payload: dict[str, Any]) -> Table | None:
+    emotion = _extract_emotion(payload)
+    if not emotion:
+        return None
+
+    evidence = emotion.get("evidence") if isinstance(emotion.get("evidence"), list) else []
+    evidence_text = "\n".join([f"- {str(item)}" for item in evidence if str(item).strip()])
+
+    rows = [
+        ("情绪标签", _text(emotion.get("emotion_label"))),
+        ("置信度", _percent_text(emotion.get("confidence"))),
+        ("分析摘要", _text(emotion.get("summary"))),
+        ("关键证据", evidence_text or "-"),
+    ]
+
+    data = [[_paragraph('<b>字段</b>', styles['table_head']), _paragraph('<b>值</b>', styles['table_head'])]]
+    for key, value in rows:
+        data.append([_paragraph(key, styles['table_cell']), _paragraph(value, styles['table_cell'])])
+
+    table = Table(data, colWidths=[40 * mm, 124 * mm], repeatRows=1)
+    table.setStyle(
+        TableStyle(
+            [
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#fef3c7')),
+                ('GRID', (0, 0), (-1, -1), 0.55, colors.HexColor('#d7dee8')),
+                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                ('LEFTPADDING', (0, 0), (-1, -1), 6),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+                ('TOPPADDING', (0, 0), (-1, -1), 4.5),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 4.5),
+            ]
+        )
+    )
+    return table
+
+
 def _temporal_points(payload: dict[str, Any]) -> list[dict[str, Any]]:
     points = payload.get('temporal_probs')
     if not isinstance(points, list):
@@ -389,7 +432,15 @@ def generate_pdf_report(payload: dict[str, Any], source_video_path: Path | None 
     story.append(_topk_table(styles, payload))
     story.append(Spacer(1, 4.5 * mm))
 
-    story.append(_paragraph('三、时序概率曲线', styles['section']))
+    story.append(_paragraph('三、情绪分析 (Gemini)', styles['section']))
+    emotion_table = _emotion_table(styles, payload)
+    if emotion_table:
+        story.append(emotion_table)
+    else:
+        story.append(_paragraph('未获取到情绪分析结果。', styles['small']))
+    story.append(Spacer(1, 4.5 * mm))
+
+    story.append(_paragraph('四、时序概率曲线', styles['section']))
     chart_image = _resolve_chart_image(payload, temp_dir)
     if chart_image and chart_image.exists():
         story.append(RLImage(str(chart_image), width=166 * mm, height=50 * mm))
@@ -397,7 +448,7 @@ def generate_pdf_report(payload: dict[str, Any], source_video_path: Path | None 
         story.append(_paragraph('未获取到时序概率曲线。', styles['small']))
     story.append(Spacer(1, 4.5 * mm))
 
-    story.append(_paragraph('四、Attention 热力图', styles['section']))
+    story.append(_paragraph('五、Attention 热力图', styles['section']))
     heatmap_table = _heatmap_table(payload)
     if heatmap_table:
         story.append(heatmap_table)

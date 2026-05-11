@@ -5,7 +5,8 @@ import ResultDashboard from '../components/ResultDashboard.vue'
 import {
   createRenderExpertJob,
   exportInferenceReport,
-  inferVideoChunked,
+  analyzeVideoChunked,
+  pollEmotionJobUntilDone,
   pollRenderJobUntilDone
 } from '../services/api'
 
@@ -281,7 +282,7 @@ async function onSubmit(file) {
   const startedAt = new Date()
 
   try {
-    const inferenceResult = await inferVideoChunked(file, (p) => {
+    const inferenceResult = await analyzeVideoChunked(file, (p) => {
       uploadProgress.value = p
     })
     result.value = {
@@ -289,7 +290,7 @@ async function onSubmit(file) {
       source_filename: file?.name || inferenceResult?.source_filename || null
     }
     const finishedAt = new Date()
-    addHistoryRecord({
+    const record = addHistoryRecord({
       videoName: file?.name || result.value?.filename || 'unknown',
       status: 'success',
       startedAt,
@@ -298,6 +299,25 @@ async function onSubmit(file) {
       errorMessage: null,
       sourceFile: file
     })
+
+    const emotionJobId = inferenceResult?.emotion_job_id
+    if (emotionJobId) {
+      try {
+        const emotionJob = await pollEmotionJobUntilDone(emotionJobId)
+        if (emotionJob?.result) {
+          result.value = {
+            ...result.value,
+            emotion: emotionJob.result
+          }
+          updateHistoryRecord(record.record_id, {
+            result: result.value
+          })
+        }
+      } catch (err) {
+        const message = err?.message || '情绪分析失败'
+        error.value = String(message)
+      }
+    }
   } catch (err) {
     if (err?.message === 'Network Error') {
       error.value = '网络连接失败：请确认后端服务已启动，并可访问 http://127.0.0.1:8000/health'

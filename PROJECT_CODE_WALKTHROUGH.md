@@ -64,6 +64,15 @@
 - 性能与来源信息
 - 推理结果进入“历史推理记录”（前端临时缓存）
 
+## 3.1.1 情绪分析链路（Gemini）
+
+1. 前端创建上传会话并完成分片上传（同推理链路）
+2. 前端调用 POST /api/v1/upload-sessions/{session_id}/analyze
+3. 本地后端合并文件，执行动作识别得到 Top-1
+4. 本地后端创建情绪分析任务（Gemini Worker）并返回 emotion_job_id
+5. 前端轮询 GET /api/v1/emotion-jobs/{job_id} 获取情绪分析结果
+6. 前端在结果页展示情绪分析，并将其写入导出报告
+
 ## 3.2 导出链路（专家视频）
 
 1. 前端创建上传会话并完成分片上传（同推理链路）
@@ -79,7 +88,7 @@
 2. `ResultDashboard` 采集当前时序曲线图与热力图路径，并通过 `export-report` 事件上抛。
 3. `UploadWorkspace` 组装导出 payload，使用上抛的 `source_filename` 作为报告视频名来源。
 4. 前端调用本地接口 `POST /api/v1/export-report`。
-5. 本地后端聚合推理结果、可视化资源并生成 PDF，返回文件流供前端下载。
+5. 本地后端聚合推理结果、情绪分析与可视化资源并生成 PDF，返回文件流供前端下载。
 
 ## 3.4 实时推理链路
 
@@ -157,6 +166,12 @@
 - 合并会话分片文件
 - 调用 run_inference_pipeline
 
+3.1 POST /upload-sessions/{session_id}/analyze
+
+- 合并会话分片文件
+- 先执行动作识别 Top-1
+- 创建 Gemini 情绪分析任务并返回 emotion_job_id
+
 4. POST /upload-sessions/{session_id}/render-expert-async
 
 - 基于会话文件创建异步导出任务
@@ -211,6 +226,10 @@
 16. POST /realtime/session/stop
 
 - 停止并清理实时会话
+
+17. GET /emotion-jobs/{job_id}
+
+- 查询情绪分析任务状态与结果
 
 设计点：
 
@@ -739,3 +758,5 @@
 
 当前项目已经从“可跑通演示”升级到“可解释、可导出、可联调、可管理历史、可实时”的工程状态。
 本地端已完成分片上传、异步导出、任务历史管理、实时推理等关键优化，具备阶段性交付条件。
+新增 Gemini 情绪分析能力后，系统已形成“动作识别 + 情绪分析”的双结果输出链路，满足演示与报告场景需求。
+新增 Gemini 情绪分析能力后，系统已形成“动作识别 + 情绪分析”的双结果输出链路，满足演示与报告场景需求。

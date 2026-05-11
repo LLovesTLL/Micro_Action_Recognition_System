@@ -29,6 +29,14 @@ class TopKItem(BaseModel):
     confidence: float
 
 
+class EmotionResult(BaseModel):
+    emotion_label: str
+    confidence: float
+    summary: str | None = None
+    evidence: list[str] = Field(default_factory=list)
+    raw_text: str | None = None
+
+
 class InferenceResponse(BaseModel):
     filename: str
     top_class: str
@@ -53,6 +61,8 @@ class InferenceResponse(BaseModel):
     inference_time_ms: float | None = None
     postprocess_time_ms: float | None = None
     total_time_ms: float | None = None
+    emotion_job_id: str | None = None
+    emotion: EmotionResult | None = None
 
 
 class RenderMeta(BaseModel):

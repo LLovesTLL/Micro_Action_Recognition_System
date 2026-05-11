@@ -9,13 +9,34 @@ const emit = defineEmits(['enter-upload', 'enter-realtime'])
       <p>请选择识别模式</p>
     </header>
 
+    <section class="home-intro">
+      <h2>系统概览</h2>
+      <p>
+        本系统面向微动作识别与情绪分析双任务，支持离线视频上传与实时摄像头推理双模式。
+      </p>
+      <div class="intro-grid">
+        <div>
+          <strong>视频上传</strong>
+          <span>适合离线批量视频，支持分片上传与报告导出。</span>
+        </div>
+        <div>
+          <strong>实时推理</strong>
+          <span>摄像头实时采集，展示 Top-1 与性能指标趋势。</span>
+        </div>
+        <div>
+          <strong>情绪分析</strong>
+          <span>调用 Gemini 2.5 Flash 输出情绪标签与依据。</span>
+        </div>
+      </div>
+    </section>
+
     <section class="entry-grid">
       <button class="entry-card upload" @click="emit('enter-upload')">
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path d="M4 6.8A2.8 2.8 0 0 1 6.8 4h10.4A2.8 2.8 0 0 1 20 6.8v10.4A2.8 2.8 0 0 1 17.2 20H6.8A2.8 2.8 0 0 1 4 17.2V6.8zm2 .2v10h12V7H6zm2.8 2.8 2.7 3.2 1.9-2.3 2.8 3.3H7.8l1-1.2zm7.7-.6a1.1 1.1 0 1 1 0-2.2 1.1 1.1 0 0 1 0 2.2z"/>
         </svg>
         <h2>视频上传</h2>
-        <p>上传本地视频，使用现有推理与导出流程。</p>
+        <p>上传本地视频，进行微动作识别与情绪分析。</p>
       </button>
 
       <button class="entry-card realtime" @click="emit('enter-realtime')">
@@ -50,6 +71,57 @@ const emit = defineEmits(['enter-upload', 'enter-realtime'])
 .home-head p {
   margin: 8px 0 0;
   color: var(--muted);
+}
+
+.home-intro {
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 18px;
+  padding: 18px 20px;
+  box-shadow: 0 18px 36px rgba(15, 23, 42, 0.08);
+  display: grid;
+  gap: 12px;
+}
+
+.home-intro h2 {
+  margin: 0;
+  font-size: 1.2rem;
+}
+
+.home-intro p {
+  margin: 0;
+  color: var(--text-strong);
+  line-height: 1.6;
+}
+
+.intro-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.intro-grid div {
+  background: rgba(248, 250, 252, 0.9);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 14px;
+  padding: 12px 14px;
+  display: grid;
+  gap: 6px;
+}
+
+.intro-grid strong {
+  font-size: 1rem;
+}
+
+.intro-grid span {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+@media (max-width: 880px) {
+  .intro-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .entry-grid {
