@@ -97,7 +97,7 @@
 
 - Node.js：20.19+ (Vite 7)
 
-## 日常运行（每次开发）
+## 日常运行
 
 ### Step 1: 启动服务器端 (Linux)
 
@@ -114,12 +114,15 @@ python remote_realtime_inference_server.py
 ssh -N -L 9000:localhost:9000 -L 9001:localhost:9001 xxx@xxx.xxx.x.xxx
 ```
 
-### Step 3: 手动启动本地应用 (推荐)
+### Step 3: 手动启动本地应用 
 
 终端 1（后端）：
 
 ```bash
 cd /d d:\Project\Micro_Action_Recognition_System
+(conda create -n Micro_Action)
+(cd backend)
+(pip install -r requirements.txt)
 conda activate Micro_Action
 set GEMINI_API_KEY=your_key_here
 set http_proxy=http://127.0.0.1:XXXX
