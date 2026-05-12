@@ -114,7 +114,7 @@ python remote_realtime_inference_server.py
 ssh -N -L 9000:localhost:9000 -L 9001:localhost:9001 xxx@xxx.xxx.x.xxx
 ```
 
-### Step 3: 手动启动本地应用 
+### Step 3: 手动启动本地应用
 
 终端 1（后端）：
 
@@ -160,14 +160,14 @@ npm run dev
 pip install -r backend/requirements.txt
 ```
 
-### 2) 出现 `pydantic-core` 构建失败（日志含 `cp314`）
+### 2) 出现 `pydantic-core` 构建失败
 
-这是 Python 3.14 兼容性问题，建议重建为 Python 3.10 环境：
+这是 Python 3.12 兼容性问题，建议重建为 Python 3.11.15环境：
 
 ```bash
 conda deactivate
 conda remove -n Micro_Action --all -y
-conda create -n Micro_Action python=3.10 -y
+conda create -n Micro_Action python=3.11.15 -y
 conda activate Micro_Action
 pip install -r backend/requirements.txt
 ```
