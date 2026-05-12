@@ -122,8 +122,8 @@ ssh -N -L 9000:localhost:9000 -L 9001:localhost:9001 xxx@xxx.xxx.x.xxx
 cd /d d:\Project\Micro_Action_Recognition_System
 conda activate Micro_Action
 set GEMINI_API_KEY=your_key_here
-set http_proxy=http://127.0.0.1:7897
-set https_proxy=http://127.0.0.1:7897
+set http_proxy=http://127.0.0.1:XXXX
+set https_proxy=http://127.0.0.1:XXXX
 uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
