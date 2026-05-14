@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 from urllib.parse import unquote
 from time import perf_counter
@@ -387,6 +388,7 @@ async def realtime_frame_infer(
     ts_client_ms: int = Form(...),
     frame: UploadFile = File(...),
 ) -> RealtimeFrameResponse:
+    t_req = perf_counter()
     mode_normalized = _normalize_mode(mode)
     session = realtime_registry.get_session(session_id)
     if not session:
@@ -399,7 +401,9 @@ async def realtime_frame_infer(
     if ext and ext not in {".jpg", ".jpeg", ".png", ".webp"}:
         raise HTTPException(status_code=400, detail="Only jpg/jpeg/png/webp frame is supported")
 
+    t_read0 = perf_counter()
     payload = await frame.read()
+    upload_ms = (perf_counter() - t_read0) * 1000.0
     if not payload:
         raise HTTPException(status_code=400, detail="Frame is empty")
 
@@ -421,29 +425,45 @@ async def realtime_frame_infer(
 
         realtime_registry.touch_frame(session_id)
 
-        topk_raw = remote.get("topk") if isinstance(remote.get("topk"), list) else []
-        topk = [
-            RealtimeTopKItem(
-                label_id=int(item.get("label_id", -1)),
-                label=str(item.get("label", "unknown")),
-                confidence=float(item.get("confidence", 0.0)),
+        topk_payload: Any = remote.get("topk")
+        topk_raw: list[Any] = topk_payload if isinstance(topk_payload, list) else []
+        topk: list[RealtimeTopKItem] = []
+        for item in topk_raw:
+            if not isinstance(item, dict):
+                continue
+            topk.append(
+                RealtimeTopKItem(
+                    label_id=int(item.get("label_id", -1)),
+                    label=str(item.get("label", "unknown")),
+                    confidence=float(item.get("confidence", 0.0)),
+                )
             )
-            for item in topk_raw
-        ]
 
-        timing_remote = remote.get("timing") if isinstance(remote.get("timing"), dict) else {}
+        timing_payload: Any = remote.get("timing")
+        timing_remote: dict[str, Any] = timing_payload if isinstance(timing_payload, dict) else {}
         total_ms = (perf_counter() - t0) * 1000.0
+        server_total_ms = (perf_counter() - t_req) * 1000.0
         timing = RealtimeTiming(
             queue_ms=float(timing_remote.get("queue_ms", 0.0)),
             remote_infer_ms=float(timing_remote.get("remote_infer_ms", 0.0)),
+            decode_ms=float(timing_remote.get("decode_ms", 0.0)),
+            hotspot_ms=float(timing_remote.get("hotspot_ms", 0.0)),
+            build_input_ms=float(timing_remote.get("build_input_ms", 0.0)),
+            postprocess_ms=float(timing_remote.get("postprocess_ms", 0.0)),
+            non_infer_ms=float(timing_remote.get("non_infer_ms", 0.0)),
             roundtrip_ms=float(timing_remote.get("roundtrip_ms", 0.0)),
             total_ms=float(timing_remote.get("total_ms", total_ms)),
+            upload_ms=float(timing_remote.get("upload_ms", upload_ms)),
+            server_total_ms=float(timing_remote.get("server_total_ms", server_total_ms)),
         )
+
+        transport = str(remote.get("transport") or "unknown")
 
         return RealtimeFrameResponse(
             session_id=session_id,
             frame_id=str(remote.get("frame_id") or uuid4().hex[:12]),
             mode=mode_normalized,
+            transport=transport,
             top_class=str(remote.get("top_class") or "unknown"),
             top_confidence=float(remote.get("top_confidence") or 0.0),
             topk=topk,

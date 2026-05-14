@@ -22,13 +22,43 @@ const timer = ref(null)
 const sessionId = ref('')
 const lastResult = ref(null)
 
+const noActionLabel = 'no obvious action'
+// If we haven't seen enough motion recently, don't keep showing an old action label.
+const motionKeepMs = 500
+const motionScoreThresh = 0.05
+const lastMotionAtMs = ref(0)
+
 const requestCount = ref(0)
 const successCount = ref(0)
 const avgLatencyMs = ref(0)
 const latencyHistory = ref([])
 const confidenceHistory = ref([])
 
-const snapshotIntervalMs = 450
+const avgClientEncodeMs = ref(0)
+const avgClientPostEncodeMs = ref(0)
+const avgClientFrameBytes = ref(0)
+
+// With current end-to-end latency ~140ms, 450ms sampling adds avoidable staleness.
+// Keep it conservative to avoid overloading weaker networks/machines.
+const snapshotIntervalMs = 150
+
+const displayResult = computed(() => {
+  const base = lastResult.value
+  if (!base) return null
+
+  const age = lastMotionAtMs.value > 0 ? Date.now() - lastMotionAtMs.value : Number.POSITIVE_INFINITY
+  if (running.value && age > motionKeepMs) {
+    return {
+      ...base,
+      top_class: noActionLabel,
+      top_confidence: 0,
+      topk: [],
+      hotspot: null
+    }
+  }
+
+  return base
+})
 
 function formatErrorMessage(err, fallback) {
   const detail = err?.response?.data?.detail
@@ -54,23 +84,23 @@ function formatErrorMessage(err, fallback) {
 }
 
 const topLabel = computed(() => {
-  if (!lastResult.value) return '-'
-  const c = Number(lastResult.value.top_confidence || 0)
-  return `${lastResult.value.top_class || 'unknown'} (${(c * 100).toFixed(1)}%)`
+  if (!displayResult.value) return '-'
+  const c = Number(displayResult.value.top_confidence || 0)
+  return `${displayResult.value.top_class || 'unknown'} (${(c * 100).toFixed(1)}%)`
 })
 
 const topk = computed(() => {
-  return Array.isArray(lastResult.value?.topk) ? lastResult.value.topk : []
+  return Array.isArray(displayResult.value?.topk) ? displayResult.value.topk : []
 })
 
 const top1Label = computed(() => {
-  const label = lastResult.value?.top_class
+  const label = displayResult.value?.top_class
   if (!label) return '-'
-  if (label === 'no obvious action') return '无明显动作'
+  if (label === noActionLabel) return '无明显动作'
   return label
 })
 
-const top1Confidence = computed(() => Math.max(0, Math.min(1, Number(lastResult.value?.top_confidence || 0))))
+const top1Confidence = computed(() => Math.max(0, Math.min(1, Number(displayResult.value?.top_confidence || 0))))
 
 const successRate = computed(() => {
   if (!requestCount.value) return 0
@@ -84,6 +114,18 @@ const latencyRing = computed(() => {
 })
 
 const avgLatencyLabel = computed(() => (avgLatencyMs.value > 0 ? `${avgLatencyMs.value.toFixed(1)}ms` : '-'))
+
+const avgEncodeLabel = computed(() => (avgClientEncodeMs.value > 0 ? `${avgClientEncodeMs.value.toFixed(1)}ms` : '-'))
+const avgPostEncodeLabel = computed(() =>
+  avgClientPostEncodeMs.value > 0 ? `${avgClientPostEncodeMs.value.toFixed(1)}ms` : '-'
+)
+const avgFrameSizeLabel = computed(() => {
+  const bytes = Number(avgClientFrameBytes.value || 0)
+  if (bytes <= 0) return '-'
+  if (bytes < 1024) return `${bytes.toFixed(0)}B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`
+  return `${(bytes / (1024 * 1024)).toFixed(2)}MB`
+})
 
 const confidenceSparkline = computed(() => {
   return sparklinePath(confidenceHistory.value, 0, 1)
@@ -115,6 +157,15 @@ function pushHistory(listRef, value, limit = 16) {
   listRef.value = [...listRef.value.slice(-(limit - 1)), value]
 }
 
+function smoothUpdate(targetRef, value, alpha = 0.15) {
+  if (!Number.isFinite(value) || value <= 0) return
+  if (targetRef.value <= 0) {
+    targetRef.value = value
+    return
+  }
+  targetRef.value = targetRef.value * (1 - alpha) + value * alpha
+}
+
 const timingText = computed(() => {
   const t = lastResult.value?.timing
   if (!t) return '-'
@@ -124,10 +175,45 @@ const timingText = computed(() => {
   return `total ${total}ms | remote ${remote}ms | rtt ${rtt}ms`
 })
 
+const serverTimingText = computed(() => {
+  const t = lastResult.value?.timing
+  if (!t) return '-'
+  const upload = Number(t.upload_ms || 0)
+  const serverTotal = Number(t.server_total_ms || 0)
+  if (upload <= 0 && serverTotal <= 0) return '-'
+  return `server_total ${serverTotal.toFixed(1)}ms | server_read ${upload.toFixed(1)}ms`
+})
+
+const transportText = computed(() => {
+  const raw = String(lastResult.value?.transport || '').trim()
+  if (!raw) return '-'
+  if (raw === 'ws') return 'WebSocket'
+  if (raw === 'http_raw') return 'HTTP RAW'
+  if (raw === 'http_multipart') return 'HTTP multipart'
+  return raw
+})
+
+const remoteBreakdownText = computed(() => {
+  const t = lastResult.value?.timing
+  if (!t) return '-'
+
+  const decode = Number(t.decode_ms || 0)
+  const hotspot = Number(t.hotspot_ms || 0)
+  const buildInput = Number(t.build_input_ms || 0)
+  const post = Number(t.postprocess_ms || 0)
+  const nonInfer = Number(t.non_infer_ms || 0)
+
+  if (decode <= 0 && hotspot <= 0 && buildInput <= 0 && post <= 0 && nonInfer <= 0) return '-'
+  return `non_infer ${nonInfer.toFixed(1)}ms | decode ${decode.toFixed(1)}ms | hotspot ${hotspot.toFixed(1)}ms | build ${buildInput.toFixed(
+    1
+  )}ms | post ${post.toFixed(1)}ms`
+})
+
 const hotspot = computed(() => {
   if (!running.value) return null
+  if (!displayResult.value) return null
 
-  const hs = lastResult.value?.hotspot
+  const hs = displayResult.value?.hotspot
   if (!hs || typeof hs !== 'object') return null
 
   const x1 = Math.max(0, Math.min(1, Number(hs.x1) || 0))
@@ -210,6 +296,7 @@ async function captureAndInfer() {
   busy.value = true
   requestCount.value += 1
   try {
+    const t0 = performance.now()
     const video = videoRef.value
     const canvas = canvasRef.value
     const ctx = canvas.getContext('2d')
@@ -223,6 +310,11 @@ async function captureAndInfer() {
     const frameBlob = await toBlob(canvas)
     if (!frameBlob) throw new Error('帧编码失败')
 
+    const tEncoded = performance.now()
+    const encodeMs = tEncoded - t0
+    smoothUpdate(avgClientEncodeMs, encodeMs)
+    smoothUpdate(avgClientFrameBytes, frameBlob.size, 0.12)
+
     const ts = Date.now()
     const resp = await sendRealtimeFrame({
       sessionId: sessionId.value,
@@ -231,7 +323,23 @@ async function captureAndInfer() {
       mode: mode.value
     })
 
-    lastResult.value = resp
+    const tDone = performance.now()
+    const postEncodeMs = tDone - tEncoded
+    smoothUpdate(avgClientPostEncodeMs, postEncodeMs)
+
+    lastResult.value = {
+      ...(resp || {}),
+      client_timing: {
+        encode_ms: encodeMs,
+        post_encode_ms: postEncodeMs,
+        frame_bytes: frameBlob.size
+      }
+    }
+
+    const hsScore = Number(resp?.hotspot?.score || 0)
+    if (hsScore >= motionScoreThresh) {
+      lastMotionAtMs.value = Date.now()
+    }
     successCount.value += 1
 
     const latency = Number(resp?.timing?.total_ms || 0)
@@ -275,13 +383,23 @@ async function startRealtime() {
     sessionId.value = started.session_id
     running.value = true
     statusText.value = '实时推理中'
+    lastMotionAtMs.value = Date.now()
 
     if (timer.value) {
-      clearInterval(timer.value)
+      clearTimeout(timer.value)
+      timer.value = null
     }
-    timer.value = setInterval(() => {
-      captureAndInfer()
-    }, snapshotIntervalMs)
+
+    const loop = async () => {
+      if (!running.value) return
+      const startedAt = performance.now()
+      await captureAndInfer()
+      const elapsed = performance.now() - startedAt
+      const delay = Math.max(0, snapshotIntervalMs - elapsed)
+      timer.value = setTimeout(loop, delay)
+    }
+
+    loop()
   } catch (err) {
     error.value = formatErrorMessage(err, '实时会话创建失败')
     statusText.value = '会话创建失败'
@@ -291,9 +409,10 @@ async function startRealtime() {
 function pauseRealtime() {
   running.value = false
   if (timer.value) {
-    clearInterval(timer.value)
+    clearTimeout(timer.value)
     timer.value = null
   }
+  lastMotionAtMs.value = 0
   statusText.value = '已暂停'
 }
 
@@ -301,6 +420,8 @@ async function stopRealtimeAll() {
   pauseRealtime()
   const sid = sessionId.value
   sessionId.value = ''
+  lastResult.value = null
+  lastMotionAtMs.value = 0
   if (sid) {
     try {
       await stopRealtimeSession(sid)
@@ -313,6 +434,7 @@ async function stopRealtimeAll() {
 }
 
 onBeforeUnmount(() => {
+  lastMotionAtMs.value = 0
   stopRealtimeAll()
 })
 </script>
@@ -384,8 +506,14 @@ onBeforeUnmount(() => {
               </svg>
             </div>
             <div class="top1-meta">
+              <!-- <p><strong>通道:</strong> {{ transportText }}</p> -->
               <p><strong>时延:</strong> {{ timingText }}</p>
-              <p><strong>平滑时延:</strong> {{ avgLatencyLabel }}</p>
+              <!-- <p><strong>远端拆分:</strong> {{ remoteBreakdownText }}</p>
+              <p><strong>后端拆分:</strong> {{ serverTimingText }}</p> -->
+              <p><strong>平均时延:</strong> {{ avgLatencyLabel }}</p>
+              <!-- <p><strong>本地编码(toBlob):</strong> {{ avgEncodeLabel }}</p> -->
+              <!-- <p><strong>编码后往返(含上传+推理):</strong> {{ avgPostEncodeLabel }}</p>
+              <p><strong>帧大小(均值):</strong> {{ avgFrameSizeLabel }}</p> -->
               <p><strong>请求成功率:</strong> {{ (successRate * 100).toFixed(1) }}%</p>
             </div>
           </div>

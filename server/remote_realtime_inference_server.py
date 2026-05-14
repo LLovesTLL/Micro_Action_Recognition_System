@@ -9,6 +9,15 @@ import uuid
 from collections import deque
 from dataclasses import dataclass
 from threading import Lock
+from urllib.parse import parse_qs, urlparse
+import asyncio
+import struct
+from typing import Any, cast
+
+try:
+    import websockets
+except Exception:  # pragma: no cover
+    websockets = None
 
 import cv2
 import numpy as np
@@ -22,6 +31,7 @@ sys.path.append(os.path.join(PROJECT_ROOT, "causal-conv1d"))
 CHECKPOINT_PATH = "/data/xcguo/Project/Micro_action/exp/mySelf/Thirteenth/checkpoint-best.pth"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 PORT = 9001
+WS_PORT = 9002
 INPUT_SIZE = 224
 NUM_FRAMES = 16
 TOPK_RETURN = 5
@@ -58,7 +68,7 @@ CLASSES_52 = [
 mean = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1, 1)
 std = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1, 1)
 
-model = None
+model: Any = None
 
 
 @dataclass
@@ -196,9 +206,12 @@ def _extract_motion_hotspot(prev_frame_rgb: np.ndarray, curr_frame_rgb: np.ndarr
 
 
 def _infer_clip(input_tensor: torch.Tensor) -> dict:
+    if DEVICE == "cuda":
+        torch.cuda.synchronize()
     t0 = time.perf_counter()
     with torch.inference_mode():
         with torch.cuda.amp.autocast(enabled=(DEVICE == "cuda"), dtype=torch.float16):
+            assert model is not None
             output = model(input_tensor)
         if torch.is_tensor(output):
             logits = output
@@ -211,21 +224,25 @@ def _infer_clip(input_tensor: torch.Tensor) -> dict:
             logits = logits.unsqueeze(0)
         probs = torch.nn.functional.softmax(logits, dim=1).squeeze(0)
 
+        # NOTE: torch ops on CUDA are async; .item() forces sync.
+        conf, pred = torch.max(probs, dim=0)
+        topk_conf, topk_idx = torch.topk(probs, k=min(TOPK_RETURN, probs.numel()))
+
+        pred_id = int(pred.item())
+        confidence = float(conf.item())
+
+        topk = [
+            {
+                "label_id": int(idx.item()),
+                "label": _safe_label(int(idx.item())),
+                "confidence": float(score.item()),
+            }
+            for score, idx in zip(topk_conf, topk_idx)
+        ]
+
+    if DEVICE == "cuda":
+        torch.cuda.synchronize()
     infer_ms = (time.perf_counter() - t0) * 1000.0
-
-    conf, pred = torch.max(probs, dim=0)
-    pred_id = int(pred.item())
-    confidence = float(conf.item())
-
-    topk_conf, topk_idx = torch.topk(probs, k=min(TOPK_RETURN, probs.numel()))
-    topk = [
-        {
-            "label_id": int(idx.item()),
-            "label": _safe_label(int(idx.item())),
-            "confidence": float(score.item()),
-        }
-        for score, idx in zip(topk_conf, topk_idx)
-    ]
 
     return {
         "top_class": _safe_label(pred_id),
@@ -291,7 +308,7 @@ def _postprocess_prediction(state: SessionState, infer: dict, hotspot: dict | No
 
 
 try:
-    from videomambapro.models.videomambapro import videomambapro_m16_ssv2 as create_model
+    from videomambapro.models.videomambapro import videomambapro_m16_ssv2 as create_model  # type: ignore[import-not-found]
 
     model = create_model(num_classes=52, num_frames=NUM_FRAMES)
     checkpoint = torch.load(CHECKPOINT_PATH, map_location="cpu")
@@ -323,6 +340,10 @@ class RealtimeHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
 
+    def _normalize_mode(self, raw) -> str:
+        mode = (raw or "fast").strip().lower()
+        return mode if mode in ("fast", "full") else "fast"
+
     def do_GET(self):
         if self.path == "/health":
             stats = session_manager.stats()
@@ -337,71 +358,292 @@ class RealtimeHandler(http.server.BaseHTTPRequestHandler):
         self._send_json({"status": "error", "message": "Not Found"}, status=404)
 
     def do_POST(self):
-        if self.path != "/realtime/predict-frame":
-            self._send_json({"status": "error", "message": "Not Found"}, status=404)
-            return
-
+        parsed = urlparse(self.path)
+        path = parsed.path
         t_start = time.perf_counter()
 
-        ctype, pdict = cgi.parse_header(self.headers.get("content-type"))
-        if ctype != "multipart/form-data":
-            self._send_json({"status": "error", "message": "Content-Type must be multipart/form-data"}, status=400)
+        if path == "/realtime/predict-frame-raw":
+            qs = parse_qs(parsed.query or "")
+            session_id = (qs.get("session_id") or [""])[0]
+            if not session_id:
+                self._send_json({"status": "error", "message": "missing session_id"}, status=400)
+                return
+            mode = self._normalize_mode((qs.get("mode") or [None])[0])
+
+            length = self.headers.get("Content-Length")
+            if not length:
+                self._send_json({"status": "error", "message": "missing Content-Length"}, status=411)
+                return
+            try:
+                content_len = int(length)
+            except ValueError:
+                self._send_json({"status": "error", "message": "invalid Content-Length"}, status=400)
+                return
+
+            t_read0 = time.perf_counter()
+            frame_bytes = self.rfile.read(content_len)
+            read_ms = (time.perf_counter() - t_read0) * 1000.0
+            if not frame_bytes:
+                self._send_json({"status": "error", "message": "empty frame body"}, status=400)
+                return
+
+            try:
+                t_dec0 = time.perf_counter()
+                frame_rgb = _decode_frame(frame_bytes)
+                decode_ms = (time.perf_counter() - t_dec0) * 1000.0
+            except Exception as exc:
+                self._send_json({"status": "error", "message": f"invalid frame: {exc}"}, status=400)
+                return
+
+            state = session_manager.get_or_create(session_id, mode)
+            state.frames.append(frame_rgb)
+            state.frame_count += 1
+            t_hs0 = time.perf_counter()
+            hotspot = _extract_motion_hotspot(state.frames[-2], state.frames[-1]) if len(state.frames) >= 2 else None
+            hotspot_ms = (time.perf_counter() - t_hs0) * 1000.0
+            warming_up = len(state.frames) < NUM_FRAMES
+
+            infer = None
+            use_cache = False
+            build_input_ms = 0.0
+            if mode == "fast" and state.last_result is not None and (state.frame_count % FAST_INFER_EVERY_N != 0):
+                infer = dict(state.last_result)
+                infer["remote_infer_ms"] = 0.0
+                use_cache = True
+            else:
+                try:
+                    t_in0 = time.perf_counter()
+                    input_tensor = _build_input_tensor(list(state.frames))
+                    build_input_ms = (time.perf_counter() - t_in0) * 1000.0
+                    infer = _infer_clip(input_tensor)
+                    state.last_result = dict(infer)
+                except Exception as exc:
+                    self._send_json({"status": "error", "message": f"inference failed: {exc}"}, status=500)
+                    return
+
+            t_pp0 = time.perf_counter()
+            final_pred = _postprocess_prediction(state, infer, hotspot)
+            postprocess_ms = (time.perf_counter() - t_pp0) * 1000.0
+
+            payload = {
+                "status": "success",
+                "session_id": session_id,
+                "frame_id": uuid.uuid4().hex[:12],
+                "mode": mode,
+                "top_class": final_pred["top_class"],
+                "top_confidence": final_pred["top_confidence"],
+                "topk": final_pred["topk"],
+                "hotspot": final_pred["hotspot"],
+                "warming_up": warming_up,
+                "source": "remote_realtime_server",
+                "cached": use_cache,
+            }
+
+            total_ms = (time.perf_counter() - t_start) * 1000.0
+            infer_ms = float(infer.get("remote_infer_ms", 0.0) or 0.0)
+            payload["timing"] = {
+                "queue_ms": 0.0,
+                "remote_infer_ms": infer_ms,
+                "roundtrip_ms": round(total_ms, 3),
+                "total_ms": round(total_ms, 3),
+                "read_ms": round(read_ms, 3),
+                "decode_ms": round(decode_ms, 3),
+                "hotspot_ms": round(hotspot_ms, 3),
+                "build_input_ms": round(build_input_ms, 3),
+                "postprocess_ms": round(postprocess_ms, 3),
+                "non_infer_ms": round(max(0.0, total_ms - infer_ms), 3),
+            }
+            self._send_json(payload)
             return
+
+        if path == "/realtime/predict-frame":
+            content_type = self.headers.get("content-type") or ""
+            ctype, pdict = cgi.parse_header(content_type)
+            if ctype != "multipart/form-data":
+                self._send_json({"status": "error", "message": "Content-Type must be multipart/form-data"}, status=400)
+                return
+
+            try:
+                pdict_any: dict[str, Any] = dict(pdict)
+                pdict_any["boundary"] = bytes(str(pdict_any["boundary"]), "utf-8")
+                fields = cgi.parse_multipart(cast(Any, self.rfile), cast(Any, pdict_any))
+            except Exception as exc:
+                self._send_json({"status": "error", "message": f"parse_multipart failed: {exc}"}, status=400)
+                return
+
+            frame_items = fields.get("frame")
+            session_items = fields.get("session_id")
+            mode_items = fields.get("mode")
+
+            if not frame_items or not session_items:
+                self._send_json({"status": "error", "message": "missing frame/session_id"}, status=400)
+                return
+
+            session_id = str(session_items[0], "utf-8") if isinstance(session_items[0], bytes) else str(session_items[0])
+            mode = (
+                str(mode_items[0], "utf-8")
+                if (mode_items and isinstance(mode_items[0], bytes))
+                else str(mode_items[0])
+                if mode_items
+                else "fast"
+            )
+            mode = self._normalize_mode(mode)
+
+            try:
+                frame_bytes = frame_items[0]
+                t_dec0 = time.perf_counter()
+                frame_rgb = _decode_frame(frame_bytes)
+                decode_ms = (time.perf_counter() - t_dec0) * 1000.0
+            except Exception as exc:
+                self._send_json({"status": "error", "message": f"invalid frame: {exc}"}, status=400)
+                return
+
+            state = session_manager.get_or_create(session_id, mode)
+            state.frames.append(frame_rgb)
+            state.frame_count += 1
+            t_hs0 = time.perf_counter()
+            hotspot = _extract_motion_hotspot(state.frames[-2], state.frames[-1]) if len(state.frames) >= 2 else None
+            hotspot_ms = (time.perf_counter() - t_hs0) * 1000.0
+            warming_up = len(state.frames) < NUM_FRAMES
+
+            infer = None
+            use_cache = False
+            build_input_ms = 0.0
+            if mode == "fast" and state.last_result is not None and (state.frame_count % FAST_INFER_EVERY_N != 0):
+                infer = dict(state.last_result)
+                infer["remote_infer_ms"] = 0.0
+                use_cache = True
+            else:
+                try:
+                    t_in0 = time.perf_counter()
+                    input_tensor = _build_input_tensor(list(state.frames))
+                    build_input_ms = (time.perf_counter() - t_in0) * 1000.0
+                    infer = _infer_clip(input_tensor)
+                    state.last_result = dict(infer)
+                except Exception as exc:
+                    self._send_json({"status": "error", "message": f"inference failed: {exc}"}, status=500)
+                    return
+
+            total_ms = (time.perf_counter() - t_start) * 1000.0
+            t_pp0 = time.perf_counter()
+            final_pred = _postprocess_prediction(state, infer, hotspot)
+            postprocess_ms = (time.perf_counter() - t_pp0) * 1000.0
+            infer_ms = float(infer.get("remote_infer_ms", 0.0) or 0.0)
+            payload = {
+                "status": "success",
+                "session_id": session_id,
+                "frame_id": uuid.uuid4().hex[:12],
+                "mode": mode,
+                "top_class": final_pred["top_class"],
+                "top_confidence": final_pred["top_confidence"],
+                "topk": final_pred["topk"],
+                "hotspot": final_pred["hotspot"],
+                "warming_up": warming_up,
+                "source": "remote_realtime_server",
+                "cached": use_cache,
+                "timing": {
+                    "queue_ms": 0.0,
+                    "remote_infer_ms": infer_ms,
+                    "roundtrip_ms": round(total_ms, 3),
+                    "total_ms": round(total_ms, 3),
+                    "decode_ms": round(decode_ms, 3),
+                    "hotspot_ms": round(hotspot_ms, 3),
+                    "build_input_ms": round(build_input_ms, 3),
+                    "postprocess_ms": round(postprocess_ms, 3),
+                    "non_infer_ms": round(max(0.0, total_ms - infer_ms), 3),
+                },
+            }
+            self._send_json(payload)
+            return
+
+        self._send_json({"status": "error", "message": "Not Found"}, status=404)
+        return
+
+
+class ThreadingTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
+    allow_reuse_address = True
+    daemon_threads = True
+
+
+async def _ws_realtime_handler(ws):
+    """WebSocket protocol: binary message = [4-byte BE header_len][header_json][jpeg_bytes]."""
+
+    while True:
+        msg = await ws.recv()
+        t_start = time.perf_counter()
+
+        if not isinstance(msg, (bytes, bytearray)):
+            await ws.send(json.dumps({"status": "error", "message": "binary message required"}, ensure_ascii=False))
+            continue
+        if len(msg) < 4:
+            await ws.send(json.dumps({"status": "error", "message": "invalid message"}, ensure_ascii=False))
+            continue
+
+        header_len = struct.unpack(">I", msg[:4])[0]
+        if header_len <= 0 or header_len > 64 * 1024 or len(msg) < 4 + header_len:
+            await ws.send(json.dumps({"status": "error", "message": "invalid header length"}, ensure_ascii=False))
+            continue
+
+        header_raw = msg[4 : 4 + header_len]
+        frame_bytes = msg[4 + header_len :]
+        if not frame_bytes:
+            await ws.send(json.dumps({"status": "error", "message": "empty frame"}, ensure_ascii=False))
+            continue
 
         try:
-            pdict["boundary"] = bytes(pdict["boundary"], "utf-8")
-            fields = cgi.parse_multipart(self.rfile, pdict)
+            header = json.loads(header_raw.decode("utf-8"))
         except Exception as exc:
-            self._send_json({"status": "error", "message": f"parse_multipart failed: {exc}"}, status=400)
-            return
+            await ws.send(json.dumps({"status": "error", "message": f"invalid header json: {exc}"}, ensure_ascii=False))
+            continue
 
-        frame_items = fields.get("frame")
-        session_items = fields.get("session_id")
-        mode_items = fields.get("mode")
-
-        if not frame_items or not session_items:
-            self._send_json({"status": "error", "message": "missing frame/session_id"}, status=400)
-            return
-
-        session_id = str(session_items[0], "utf-8") if isinstance(session_items[0], bytes) else str(session_items[0])
-        mode = str(mode_items[0], "utf-8") if (mode_items and isinstance(mode_items[0], bytes)) else str(mode_items[0]) if mode_items else "fast"
+        session_id = str(header.get("session_id") or "")
+        if not session_id:
+            await ws.send(json.dumps({"status": "error", "message": "missing session_id"}, ensure_ascii=False))
+            continue
+        mode = str(header.get("mode") or "fast")
         mode = mode.lower().strip()
         if mode not in ("fast", "full"):
             mode = "fast"
 
         try:
-            frame_bytes = frame_items[0]
+            t_dec0 = time.perf_counter()
             frame_rgb = _decode_frame(frame_bytes)
+            decode_ms = (time.perf_counter() - t_dec0) * 1000.0
         except Exception as exc:
-            self._send_json({"status": "error", "message": f"invalid frame: {exc}"}, status=400)
-            return
+            await ws.send(json.dumps({"status": "error", "message": f"invalid frame: {exc}"}, ensure_ascii=False))
+            continue
 
         state = session_manager.get_or_create(session_id, mode)
         state.frames.append(frame_rgb)
         state.frame_count += 1
-        hotspot = None
-        if len(state.frames) >= 2:
-            hotspot = _extract_motion_hotspot(state.frames[-2], state.frames[-1])
-
+        t_hs0 = time.perf_counter()
+        hotspot = _extract_motion_hotspot(state.frames[-2], state.frames[-1]) if len(state.frames) >= 2 else None
+        hotspot_ms = (time.perf_counter() - t_hs0) * 1000.0
         warming_up = len(state.frames) < NUM_FRAMES
 
         infer = None
         use_cache = False
+        build_input_ms = 0.0
         if mode == "fast" and state.last_result is not None and (state.frame_count % FAST_INFER_EVERY_N != 0):
             infer = dict(state.last_result)
             infer["remote_infer_ms"] = 0.0
             use_cache = True
         else:
             try:
+                t_in0 = time.perf_counter()
                 input_tensor = _build_input_tensor(list(state.frames))
+                build_input_ms = (time.perf_counter() - t_in0) * 1000.0
                 infer = _infer_clip(input_tensor)
                 state.last_result = dict(infer)
             except Exception as exc:
-                self._send_json({"status": "error", "message": f"inference failed: {exc}"}, status=500)
-                return
+                await ws.send(json.dumps({"status": "error", "message": f"inference failed: {exc}"}, ensure_ascii=False))
+                continue
 
-        total_ms = (time.perf_counter() - t_start) * 1000.0
+        t_pp0 = time.perf_counter()
         final_pred = _postprocess_prediction(state, infer, hotspot)
+        postprocess_ms = (time.perf_counter() - t_pp0) * 1000.0
+        total_ms = (time.perf_counter() - t_start) * 1000.0
+        infer_ms = float(infer.get("remote_infer_ms", 0.0) or 0.0)
         payload = {
             "status": "success",
             "session_id": session_id,
@@ -416,23 +658,50 @@ class RealtimeHandler(http.server.BaseHTTPRequestHandler):
             "cached": use_cache,
             "timing": {
                 "queue_ms": 0.0,
-                "remote_infer_ms": infer["remote_infer_ms"],
+                "remote_infer_ms": infer_ms,
                 "roundtrip_ms": round(total_ms, 3),
                 "total_ms": round(total_ms, 3),
+                "decode_ms": round(decode_ms, 3),
+                "hotspot_ms": round(hotspot_ms, 3),
+                "build_input_ms": round(build_input_ms, 3),
+                "postprocess_ms": round(postprocess_ms, 3),
+                "non_infer_ms": round(max(0.0, total_ms - infer_ms), 3),
             },
         }
-        self._send_json(payload)
+        await ws.send(json.dumps(payload, ensure_ascii=False))
 
 
-class ThreadingTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
-    allow_reuse_address = True
-    daemon_threads = True
+async def _run_ws_server():
+    if websockets is None:
+        raise RuntimeError("websockets package is not installed")
+
+    async with websockets.serve(_ws_realtime_handler, "0.0.0.0", WS_PORT, max_size=6 * 1024 * 1024):
+        print(f"Starting Remote Realtime WebSocket Server on {WS_PORT}...")
+        await asyncio.Future()
 
 
 if __name__ == "__main__":
-    print(f"Starting Remote Realtime Inference Server on {PORT}...")
-    with ThreadingTCPServer(("", PORT), RealtimeHandler) as httpd:
+    # Start HTTP server (9001) for compatibility + health; optional WS server (9002) for low-latency streaming.
+    if websockets is None:
+        print(">>> [RealtimeServer] websockets not installed; WS endpoint disabled. Install with: pip install websockets")
+        print(f"Starting Remote Realtime Inference Server on {PORT}...")
+        with ThreadingTCPServer(("", PORT), RealtimeHandler) as httpd:
+            try:
+                httpd.serve_forever()
+            except KeyboardInterrupt:
+                print("\n>>> Realtime Server Stopped.")
+    else:
+        def _run_http():
+            print(f"Starting Remote Realtime Inference Server on {PORT}...")
+            with ThreadingTCPServer(("", PORT), RealtimeHandler) as httpd:
+                httpd.serve_forever()
+
+        import threading
+
+        http_thread = threading.Thread(target=_run_http, daemon=True)
+        http_thread.start()
+
         try:
-            httpd.serve_forever()
+            asyncio.run(_run_ws_server())
         except KeyboardInterrupt:
             print("\n>>> Realtime Server Stopped.")

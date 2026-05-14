@@ -41,7 +41,9 @@
 
 ## 3. 端到端请求链路
 
-## 3.1 推理链路（预测）
+### 3.1 推理链路
+
+#### 3.1.1 动作识别
 
 1. 前端创建上传会话，调用本地接口 POST /api/v1/upload-sessions
 2. 前端按分片上传视频，调用 PUT /api/v1/upload-sessions/{session_id}/chunks/{chunk_index}
@@ -64,7 +66,7 @@
 - 性能与来源信息
 - 推理结果进入“历史推理记录”（前端临时缓存）
 
-## 3.1.1 情绪分析链路（Gemini）
+#### 3.1.2 情绪分析链路（Gemini）
 
 1. 前端创建上传会话并完成分片上传（同推理链路）
 2. 前端调用 POST /api/v1/upload-sessions/{session_id}/analyze
@@ -73,7 +75,7 @@
 5. 前端轮询 GET /api/v1/emotion-jobs/{job_id} 获取情绪分析结果
 6. 前端在结果页展示情绪分析，并将其写入导出报告
 
-## 3.2 导出链路（专家视频）
+### 3.2 导出链路（专家视频）
 
 1. 前端创建上传会话并完成分片上传（同推理链路）
 2. 前端调用 POST /api/v1/upload-sessions/{session_id}/render-expert-async 创建异步导出任务
@@ -82,7 +84,7 @@
 5. 任务成功后返回 result.local_download_url，前端触发下载
 6. 导出任务同时进入任务历史，可在页面按类别筛选、删除与清理
 
-## 3.3. 导出链路（PDF 报告）
+### 3.3. 导出链路（PDF 报告）
 
 1. 前端结果页点击“导出推理报告（PDF）”。
 2. `ResultDashboard` 采集当前时序曲线图与热力图路径，并通过 `export-report` 事件上抛。
@@ -90,18 +92,19 @@
 4. 前端调用本地接口 `POST /api/v1/export-report`。
 5. 本地后端聚合推理结果、情绪分析与可视化资源并生成 PDF，返回文件流供前端下载。
 
-## 3.4 实时推理链路
+### 3.4 实时推理链路
 
 1. 前端主页面选择“实时推理”，进入实时页。
 2. 前端调用 POST /api/v1/realtime/session/start 创建会话，获取 session_id。
 3. 前端周期性抓取摄像头帧并调用 POST /api/v1/realtime/frame（multipart）。
-4. 本地后端将帧转发到远程 POST /realtime/predict-frame。
+4. 本地后端将帧转发到远程 realtime 服务，优先走 WebSocket，失败回退 RAW，再回退 multipart。
 5. 远程实时服务完成：
 
 - 16 帧滑窗构造
 - 模型前向（fast/full）
 - 运动差分热点框（hotspot）
 - timing 与 topk 组织
+- transport 标识（ws / http_raw / http_multipart）与细粒度 timing 拆分
 
 6. 本地后端透传并规范化响应。
 7. 前端实时渲染：
@@ -110,12 +113,13 @@
 - 时延
 - 热点框叠加到摄像头画面
 - 会话状态与成功率
+- 动作结果短保留（默认约 800ms），热点消失后自动回落为“无明显动作”
 
 ---
 
 ## 4. 本地后端代码解读
 
-## 4.1 应用入口
+### 4.1 应用入口
 
 文件：backend/app/main.py
 
@@ -131,7 +135,7 @@
 - 健康检查只代表本地后端存活，不代表远程模型服务可用
 - 远程连通性由 ModelService 独立检查
 
-## 4.2 配置管理
+### 4.2 配置管理
 
 文件：backend/app/core/config.py
 
@@ -145,7 +149,7 @@
 - class_names 当前保留旧占位字段，实际分类映射已经由 ModelService 内部 52 类维护
 - 建议后续统一到单一配置源，避免重复定义
 
-## 4.3 路由层
+### 4.3 路由层
 
 文件：backend/app/api/routes.py
 
@@ -222,6 +226,7 @@
 15. POST /realtime/frame
 
 - 接收单帧图片并转发远程实时推理，返回实时识别结果
+	- 透传 `transport` 与细粒度 `timing`（decode/build_input/hotspot/postprocess/non_infer/upload/server_total）
 
 16. POST /realtime/session/stop
 
@@ -238,7 +243,7 @@
 - 导出任务具备历史管理能力（查询/筛选/删除/清空）
 - 下载代理让前端只访问本地域名，减少跨域与认证复杂度
 
-## 4.4 远程调用层
+### 4.4 远程调用层
 
 文件：backend/app/services/model_service.py
 
@@ -258,12 +263,17 @@
 - predict_realtime_frame_remote
 - check_realtime_health
 
+新增要点：
+
+- realtime 远端调用优先走 WebSocket，失败回退 RAW，再回退 multipart
+- 返回中注入 `transport` 以便前端确认当前通道
+
 设计点：
 
 - 通过 remote_base_url 统一拼接远程端点
 - 错误输出标准化为 error 字段，便于上层处理
 
-## 4.5 推理编排层
+### 4.5 推理编排层
 
 文件：backend/app/services/pipeline_service.py
 
@@ -307,7 +317,7 @@
 - 本地层不做模型计算，主要做结果组织与可视化资产准备
 - 兼容字段设计使得远程升级时本地不易断裂
 
-## 4.6 上传会话服务
+### 4.6 上传会话服务
 
 文件：backend/app/services/upload_session_service.py
 
@@ -331,7 +341,7 @@
 - 会话目录与分片目录隔离，结构清晰
 - 合并后做总大小校验，避免文件损坏进入推理链路
 
-## 4.7 导出任务服务
+### 4.7 导出任务服务
 
 文件：backend/app/services/export_job_service.py
 
@@ -352,7 +362,7 @@
 - 任务历史持久化到 backend/storage/outputs/render_jobs_history.json
 - 记录 class_label，便于页面按类别检索历史
 
-## 4.8 可视化服务层
+### 4.8 可视化服务层
 
 文件：backend/app/services/visualization_service.py
 
@@ -367,7 +377,7 @@
 - create_attention_overlay 支持传入 hotspot 坐标并绘制红框
 - 若 attention 渲染失败，pipeline 会回退到基础热图逻辑
 
-## 4.9 数据模型
+### 4.9 数据模型
 
 文件：backend/app/schemas/inference.py
 
@@ -385,6 +395,11 @@
 - RealtimeFrameResponse
 - RealtimeHotspot
 
+新增字段：
+
+- `RealtimeFrameResponse.transport`
+- `RealtimeTiming` 细粒度字段（decode/build_input/hotspot/postprocess/non_infer/upload/server_total）
+
 设计点：
 
 - 既有业务字段，也有可观测字段（source/mode/time 等）
@@ -394,7 +409,7 @@
 
 ## 5. 前端代码解读
 
-## 5.1 入口与页面容器
+### 5.1 入口与页面容器
 
 文件：frontend/src/main.js
 文件：frontend/src/App.vue
@@ -410,7 +425,7 @@
 - 原有上传能力完整保留
 - 新增实时页面，不影响原有上传识别与导出链路
 
-## 5.2 上传组件
+### 5.2 上传组件
 
 文件：frontend/src/components/UploadPanel.vue
 
@@ -425,7 +440,7 @@
 - 组件保持无业务耦合，只负责拿到文件并 emit
 - 当用户查看历史推理结果时，上传模块不显示当前视频预览
 
-## 5.3 结果看板
+### 5.3 结果看板
 
 文件：frontend/src/components/ResultDashboard.vue
 
@@ -453,7 +468,7 @@
 - 读取 HeatmapFrame.hotspot 的归一化坐标
 - 在缩略图上绝对定位绘制红框
 
-## 5.4 API 调用封装
+### 5.4 API 调用封装
 
 文件：frontend/src/services/api.js
 
@@ -466,7 +481,11 @@
 - 实时推理：getRealtimeHealth / startRealtimeSession / sendRealtimeFrame / stopRealtimeSession
 - 历史推理记录与导出逻辑由前端 UploadWorkspace 本地维护
 
-## 5.5 实时推理页面
+新增说明：
+
+- `sendRealtimeFrame` 仍为 multipart 到本地后端，但后端已优先转发 WS/RAW 到远端
+
+### 5.5 实时推理页面
 
 文件：frontend/src/views/RealtimeWorkspace.vue
 
@@ -476,6 +495,11 @@
 - 管理实时会话生命周期
 - 展示 Top1/TopK/时延
 - 在视频上叠加热点框
+
+新增能力：
+
+- 显示 `通道/远端拆分/后端拆分/编码耗时/往返耗时/帧大小` 等指标
+- 动作结果短保留：热点消失后自动回落为“无明显动作”，避免旧结果持续显示
 
 关键点：
 
@@ -489,7 +513,14 @@
 - 当前读取后端返回 RealtimeHotspot
 - 坐标为归一化比例，前端按百分比绝对定位绘制
 
-## 5.6 历史推理记录
+3. 摄像头抓帧与调度
+
+- `navigator.mediaDevices.getUserMedia` 打开摄像头（默认 960x540，用户前置）。
+- 每次循环将 video 画面绘制到 canvas，再用 `toBlob('image/jpeg', 0.78)` 编码。
+- 发送逻辑采用“请求完成后 setTimeout 递归”模式：上一帧完成后按 `snapshotIntervalMs` 计算延迟再触发下一帧，避免并发堆积。
+- 编码耗时、编码后往返耗时、帧大小会在前端统计并展示。
+
+### 5.6 历史推理记录
 
 位置：frontend/src/views/UploadWorkspace.vue
 
@@ -508,11 +539,11 @@
 
 ---
 
-## 6. 远程服务 remote_inference_server.py 详解（重点）
+## 6. 远程服务 remote_inference_server.py 详解
 
 本文件是系统核心计算引擎，承担推理、时序分析、注意力解释与视频导出。
 
-## 6.1 配置区
+### 6.1 配置区
 
 主要参数：
 
@@ -530,7 +561,7 @@
 - 演示场景推荐 ATTENTION_NORMALIZE_MODE=global
 - 低延迟场景可临时关闭 ENABLE_TEMPORAL_PROBS
 
-## 6.2 模型加载与特征钩子
+### 6.2 模型加载与特征钩子
 
 流程：
 
@@ -548,7 +579,7 @@
 
 - 尽量稳定命中特征层，提高 attention_source=feature_hook 的概率
 
-## 6.3 视频预处理
+### 6.3 视频预处理
 
 函数：preprocess_video
 
@@ -566,7 +597,7 @@
 - 短视频补帧
 - RGB 转换与 ImageNet 归一化
 
-## 6.4 推理与结果组织
+### 6.4 推理与结果组织
 
 公共函数：_run_inference_from_video_path
 
@@ -583,7 +614,7 @@
 - 保留 logits 概率字段用于老版本兼容
 - 新版本推荐使用 probs 与 logits_raw
 
-## 6.5 注意力与热点框
+### 6.5 注意力与热点框
 
 关键函数：
 
@@ -597,7 +628,7 @@
 - 失败时回退输入能量图
 - 热点框输出归一化坐标，前端可直接渲染
 
-## 6.6 专家视频导出
+### 6.6 专家视频导出
 
 关键函数：
 
@@ -619,7 +650,7 @@
 - 导出文件数量受 RENDER_KEEP_MAX_FILES 控制
 - 服务会清理旧文件，避免目录无限增长
 
-## 6.7 路由处理器
+### 6.7 路由处理器
 
 类：VideoMambaInferenceHandler
 
@@ -635,7 +666,7 @@
 - 使用 http.server + cgi.parse_multipart
 - 无 FastAPI 依赖，部署简单
 
-## 6.8 远程实时服务 remote_realtime_inference_server.py
+## 7. 远程实时服务 remote_realtime_inference_server.py
 
 本文件负责摄像头实时推理与低延迟优化。
 
@@ -656,7 +687,7 @@
 
 ---
 
-## 7. 数据契约要点（学习与联调重点）
+## 8. 数据契约要点（学习与联调重点）
 
 预测核心字段：
 
@@ -678,14 +709,15 @@
 实时核心字段：
 
 - session_id / frame_id / mode
+- transport（ws / http_raw / http_multipart）
 - top_class / top_confidence / topk
 - hotspot（x1,y1,x2,y2,score,source）
-- timing（queue_ms, remote_infer_ms, roundtrip_ms, total_ms）
+- timing（queue_ms, remote_infer_ms, roundtrip_ms, total_ms, decode_ms, build_input_ms, hotspot_ms, postprocess_ms, non_infer_ms, upload_ms, server_total_ms）
 - warming_up / source
 
 ---
 
-## 8. 常见排障路径
+## 9. 常见排障路径
 
 1. 前端报 Network Error
 
@@ -736,7 +768,7 @@
 
 ---
 
-## 9. 推荐阅读顺序
+## 10. 推荐阅读顺序
 
 建议按以下顺序阅读代码：
 
@@ -754,9 +786,8 @@
 
 ---
 
-## 10. 结语
+## 11.  结语
 
 当前项目已经从“可跑通演示”升级到“可解释、可导出、可联调、可管理历史、可实时”的工程状态。
 本地端已完成分片上传、异步导出、任务历史管理、实时推理等关键优化，具备阶段性交付条件。
-新增 Gemini 情绪分析能力后，系统已形成“动作识别 + 情绪分析”的双结果输出链路，满足演示与报告场景需求。
 新增 Gemini 情绪分析能力后，系统已形成“动作识别 + 情绪分析”的双结果输出链路，满足演示与报告场景需求。

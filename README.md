@@ -35,6 +35,21 @@
 - 前端结果页新增“情绪分析 (Gemini)”区块；报告导出新增情绪分析章节。
 - 上传按钮文案更新为“开始分析”，主页增加系统概览介绍。
 
+### 2026-05-14 增量更新（实时链路传输优化）
+
+- 优先通道改为 WebSocket（单连接持续发帧），回退链路为 HTTP RAW → multipart。
+- 后端在 realtime 响应中稳定注入 `transport` 与更细粒度 `timing`（decode_ms/build_input_ms/hotspot_ms/postprocess_ms/non_infer_ms 等），便于前端展示拆分耗时。
+- 修正远端/本地计时口径：在远端推理点增加 `torch.cuda.synchronize()`，使 `remote_infer_ms` 更准确，避免异步导致的计时偏差。
+- 前端实时页改进：动作结果短保留策略（默认 800ms），当热点消失后自动回落到“No obvious action”；前端对缺失的观测字段采用兜底显示（显示 `-`）。
+- 优化协议：在不破坏兼容性的前提下，减少 multipart 解析成本并增加 RAW 二进制通道以降低延迟。
+- 验证与排障快捷步骤已写入 `server/REMOTE_INFERENCE_GUIDE.md`，包含检查 `transport` 字段、重启 uvicorn、以及 WebSocket/RAW 的连通性检测命令。
+
+本次改动简述：
+
+- 实时链路的可观测性补齐了，能直接判断走的是 WebSocket / RAW / multipart。
+- 实时结果不再“挂太久”，动作热点消失后会快速回落，避免旧结果持续显示。
+- 端到端计时口径更准确，方便继续调 `FAST_INFER_EVERY_N`、拒识阈值和稳定窗口。
+
 ## 截止目前已完成工作
 
 ### 1) 分布式推理引擎（远程端 - Linux）
@@ -106,12 +121,12 @@ python remote_inference_server.py
 python remote_realtime_inference_server.py
 ```
 
-建议分别在两个终端启动，分别监听 `9000` 和 `9001`。
+建议分别在两个终端启动，分别监听 `9000` 和 `9001/9002`。
 
 ### Step 2: 建立通信链路 (Windows Terminal)
 
 ```bash
-ssh -N -L 9000:localhost:9000 -L 9001:localhost:9001 xxx@xxx.xxx.x.xxx
+ssh -N -L 9000:localhost:9000 -L 9001:localhost:9001 9002:localhost:9002 xxx@xxx.xxx.x.xxx
 ```
 
 ### Step 3: 手动启动本地应用
@@ -275,6 +290,11 @@ http://127.0.0.1:8000/api/v1/realtime/health
 
 - 新增 Gemini 情绪分析 Worker 与任务查询接口，支持异步分析与结果回传。
 - 情绪分析结果在前端展示，并纳入 PDF 报告输出。
+
+    8.**实时链路传输优化**
+
+* 优先通道改为 WebSocket（单连接持续发帧）
+* 优化协议：在不破坏兼容性的前提下，减少 multipart 解析成本并增加 RAW 二进制通道以降低延迟。
 
 ## 阶段性结论
 

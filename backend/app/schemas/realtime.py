@@ -10,8 +10,15 @@ class RealtimeTopKItem(BaseModel):
 class RealtimeTiming(BaseModel):
     queue_ms: float = 0.0
     remote_infer_ms: float = 0.0
+    decode_ms: float = 0.0
+    hotspot_ms: float = 0.0
+    build_input_ms: float = 0.0
+    postprocess_ms: float = 0.0
+    non_infer_ms: float = 0.0
     roundtrip_ms: float = 0.0
     total_ms: float = 0.0
+    upload_ms: float = 0.0
+    server_total_ms: float = 0.0
 
 
 class RealtimeHotspot(BaseModel):
@@ -28,6 +35,7 @@ class RealtimeFrameResponse(BaseModel):
     session_id: str
     frame_id: str
     mode: str
+    transport: str = 'unknown'
     top_class: str
     top_confidence: float
     topk: list[RealtimeTopKItem] = Field(default_factory=list)
