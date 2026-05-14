@@ -126,7 +126,7 @@ python remote_realtime_inference_server.py
 ### Step 2: 建立通信链路 (Windows Terminal)
 
 ```bash
-ssh -N -L 9000:localhost:9000 -L 9001:localhost:9001 9002:localhost:9002 xxx@xxx.xxx.x.xxx
+ssh -N -L 9000:localhost:9000 -L 9001:localhost:9001 -L 9002:localhost:9002 xxx@xxx.xxx.x.xxx
 ```
 
 ### Step 3: 手动启动本地应用
@@ -291,7 +291,7 @@ http://127.0.0.1:8000/api/v1/realtime/health
 - 新增 Gemini 情绪分析 Worker 与任务查询接口，支持异步分析与结果回传。
 - 情绪分析结果在前端展示，并纳入 PDF 报告输出。
 
-    8.**实时链路传输优化**
+8. **实时链路传输优化**
 
 * 优先通道改为 WebSocket（单连接持续发帧）
 * 优化协议：在不破坏兼容性的前提下，减少 multipart 解析成本并增加 RAW 二进制通道以降低延迟。

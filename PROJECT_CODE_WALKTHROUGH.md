@@ -36,6 +36,7 @@
 - remote_realtime_inference_server.py：远程 Linux 侧实时推理服务，负责摄像头帧实时识别与热点框生成
 - REMOTE_INFERENCE_GUIDE.md：远程部署与联调手册
 - README.md：项目总体状态与开发入口
+- test/result：本地测试素材与示例视频（用于联调或演示）
 
 ---
 
@@ -91,6 +92,7 @@
 3. `UploadWorkspace` 组装导出 payload，使用上抛的 `source_filename` 作为报告视频名来源。
 4. 前端调用本地接口 `POST /api/v1/export-report`。
 5. 本地后端聚合推理结果、情绪分析与可视化资源并生成 PDF，返回文件流供前端下载。
+6. 报告优先复用当前页面已经展示的图像与结果，避免导出内容和页面内容分离。
 
 ### 3.4 实时推理链路
 
@@ -113,7 +115,7 @@
 - 时延
 - 热点框叠加到摄像头画面
 - 会话状态与成功率
-- 动作结果短保留（默认约 800ms），热点消失后自动回落为“无明显动作”
+- 动作结果短保留（默认约 500ms），热点消失后自动回落为“无明显动作”
 
 ---
 
@@ -226,7 +228,7 @@
 15. POST /realtime/frame
 
 - 接收单帧图片并转发远程实时推理，返回实时识别结果
-	- 透传 `transport` 与细粒度 `timing`（decode/build_input/hotspot/postprocess/non_infer/upload/server_total）
+  - 透传 `transport` 与细粒度 `timing`（decode/build_input/hotspot/postprocess/non_infer/upload/server_total）
 
 16. POST /realtime/session/stop
 
@@ -235,6 +237,12 @@
 17. GET /emotion-jobs/{job_id}
 
 - 查询情绪分析任务状态与结果
+
+18. POST /export-report
+
+- 生成 PDF 推理报告
+- 接收推理结果、情绪分析结果、时序图数据、热力图资源与原始视频名
+- 返回 `application/pdf` 文件流，前端可直接触发下载
 
 设计点：
 
@@ -380,6 +388,7 @@
 ### 4.9 数据模型
 
 文件：backend/app/schemas/inference.py
+文件：backend/app/schemas/realtime.py
 
 职责：
 
@@ -405,6 +414,100 @@
 - 既有业务字段，也有可观测字段（source/mode/time 等）
 - 导出接口返回中保留 inference 原始结构，利于调试
 
+### 4.10 PDF 报告生成服务
+
+文件：backend/app/services/report_service.py
+
+职责：
+
+- 将推理结果、情绪结果与可视化资源拼装成 PDF
+- 统一处理视频元信息、Top-K、时序概率曲线与热力图章节
+- 优先使用前端传来的高清图像数据，降低导出与页面展示之间的差异
+
+关键逻辑：
+
+1. 视频名优先级
+
+- 优先使用 `source_filename`
+- 再回退到 `video_name`
+- 最后才使用服务端兜底字段
+
+2. 图像复用
+
+- `chart_data_url` 用于承载前端当前时序图的序列化结果
+- 若没有前端图像，则回退到根据 temporal_probs 本地生成图
+- `heatmaps` 支持单张或多张热图，尽量直接嵌入报告
+
+3. 报告结构
+
+- 视频与推理概览
+- Top-K 结果
+- 时序概率曲线
+- Attention 热力图
+
+设计点：
+
+- PDF 生成逻辑独立于页面展示，但尽量复用同一份业务结果
+- 报告不再额外堆叠与用户无关的说明段落，重点保留可读的结果与图像
+
+### 4.11 实时会话服务
+
+文件：backend/app/services/realtime_service.py
+
+职责：
+
+- 维护实时会话注册表与并发安全
+- 记录会话状态、更新时间与已处理帧数
+
+关键能力：
+
+- create_session / get_session / delete_session
+- mark_inflight / touch_frame
+
+设计点：
+
+- 轻量内存存储，适合本地演示
+- Lock 保护，避免多线程条件竞争
+
+### 4.12 本地存储服务
+
+文件：backend/app/services/storage_service.py
+
+职责：
+
+- 统一管理本地 uploads/outputs 路径
+- 生成文件与任务历史的持久化路径
+
+设计点：
+
+- 集中化路径拼接，减少散落硬编码
+
+### 4.13 视频采样与特征
+
+文件：backend/app/services/video_service.py
+
+职责：
+
+- 从视频中均匀采样帧
+- 提取基础视觉特征（灰度统计、边缘比例、象限均值）
+
+设计点：
+
+- 简单特征用于轻量分析或后续扩展
+
+### 4.14 Gemini 情绪分析服务
+
+文件：backend/app/services/gemini_emotion_service.py
+
+职责：
+
+- 创建与轮询情绪分析任务
+- 封装 Gemini 侧调用与结果标准化
+
+设计点：
+
+- 与动作识别解耦，便于后续替换或扩展情绪模型
+
 ---
 
 ## 5. 前端代码解读
@@ -424,6 +527,19 @@
 
 - 原有上传能力完整保留
 - 新增实时页面，不影响原有上传识别与导出链路
+
+### 5.1.1 首页入口面板
+
+文件：frontend/src/components/HomeEntryPanel.vue
+
+职责：
+
+- 提供“视频上传 / 实时推理”入口交互
+- 承担首页样式与入口布局
+
+设计点：
+
+- 入口逻辑与实际工作区解耦，便于调整首页视觉
 
 ### 5.2 上传组件
 
@@ -468,6 +584,12 @@
 - 读取 HeatmapFrame.hotspot 的归一化坐标
 - 在缩略图上绝对定位绘制红框
 
+4. PDF 导出联动
+
+- 通过 `export-report` 事件向父组件上抛导出 payload
+- 导出 payload 中显式携带 `source_filename`、`chart_data_url` 与 `heatmaps`
+- 时序曲线优先使用页面 SVG 序列化后的高清图片，热力图优先复用当前结果页已有资源
+
 ### 5.4 API 调用封装
 
 文件：frontend/src/services/api.js
@@ -477,6 +599,7 @@
 - 上传会话管理：创建、分片上传、会话状态查询
 - 推理触发：inferVideoChunked
 - 异步导出：createRenderExpertJob + pollRenderJobUntilDone
+- PDF 导出：exportInferenceReport
 - 任务管理：listRenderJobs / deleteRenderJob / clearRenderJobs
 - 实时推理：getRealtimeHealth / startRealtimeSession / sendRealtimeFrame / stopRealtimeSession
 - 历史推理记录与导出逻辑由前端 UploadWorkspace 本地维护
@@ -484,6 +607,7 @@
 新增说明：
 
 - `sendRealtimeFrame` 仍为 multipart 到本地后端，但后端已优先转发 WS/RAW 到远端
+- `exportInferenceReport` 以 blob 方式接收 PDF 文件流，供按钮点击后直接下载
 
 ### 5.5 实时推理页面
 
@@ -536,6 +660,16 @@
 - 原始视频文件存 IndexedDB，按会话 token 进行隔离
 - 若记录没有导出结果，点击“下载”会先触发导出，再下载
 - 查看历史详情时会补齐 `source_filename`，用于报告导出时保持原始文件名一致
+- 当当前结果页已经生成 `chart_data_url` 和 `heatmaps` 时，导出 PDF 会优先复用这些资源，减少与页面展示不一致的风险
+
+### 5.7 基础样式
+
+文件：frontend/src/assets/base.css
+
+职责：
+
+- 全局样式与基础排版
+- 提供页面基础背景与字体规则
 
 ---
 
@@ -685,9 +819,101 @@
 - 启动预热
 - fast 模式跳帧推理 + 缓存复用
 
+### 7.1 配置与常量
+
+关键配置：
+
+- `CHECKPOINT_PATH` / `DEVICE`：模型权重与推理设备选择
+- `PORT` / `WS_PORT`：HTTP 与 WebSocket 端口
+- `NUM_FRAMES` / `INPUT_SIZE`：滑窗帧数与输入分辨率
+- `MAX_SESSIONS` / `SESSION_TTL_SEC`：会话上限与 TTL 清理策略
+
+拒识与稳定器参数：
+
+- `REJECT_TOP1_CONF_THRESH` / `REJECT_TOP1_TOP2_MARGIN_THRESH`：低置信度与类间差距门控
+- `REJECT_MOTION_SCORE_THRESH`：运动差分弱时的拒识门控
+- `SMOOTH_WINDOW` / `SMOOTH_MIN_COUNT`：短窗投票平滑，减小抖动
+
+### 7.2 会话缓存与过期清理
+
+类：`SessionManager`
+
+职责：
+
+- 管理 `SessionState`（帧缓冲、最新结果、预测历史）
+- 提供 `get_or_create` 并在请求入口刷新 `updated_at`
+- 过期清理与超限淘汰（TTL + LRU-like 最老会话驱逐）
+
+关键点：
+
+- `frames` 为固定长度 `deque(maxlen=NUM_FRAMES)`，保证滑窗输入
+- `pred_history` 为短窗标签序列，用于稳定输出
+
+### 7.3 帧解码与输入构造
+
+函数：`_decode_frame`
+
+- JPEG bytes -> BGR -> RGB -> resize 到 `INPUT_SIZE`
+
+函数：`_build_input_tensor`
+
+- 将最近 `NUM_FRAMES` 堆叠成 `[T, H, W, C]`
+- 转成张量并排列为 `[1, C, T, H, W]`
+- 归一化到 ImageNet mean/std
+
+### 7.4 运动差分热点框
+
+函数：`_extract_motion_hotspot`
+
+- 灰度差分 + 高斯滤波 + Otsu 二值化
+- 形态学开运算/膨胀去噪
+- 选择最大轮廓计算框，输出归一化坐标
+- 根据面积过滤噪声并生成 `score`
+
+### 7.5 推理与 Top-K
+
+函数：`_infer_clip`
+
+- 使用 AMP 半精度执行模型前向
+- softmax 得到概率，计算 top1 与 topk
+- 记录 `remote_infer_ms`
+
+### 7.6 拒识门控与短窗稳定
+
+函数：`_postprocess_prediction`
+
+- 根据 top1 置信度、top1-top2 margin、motion_score 累积拒识票
+- 达到阈值则输出 `NO_ACTION_LABEL`
+- 维护 `pred_history` 做短窗多数投票，减少抖动
+- 最终输出合并热点框与置信度
+
+### 7.7 HTTP 接口流程
+
+路径：`/realtime/predict-frame-raw`（RAW bytes） 与 `/realtime/predict-frame`（multipart）
+
+处理步骤：
+
+- 解析 session_id / mode
+- 解码帧 -> 更新会话 -> 计算 motion hotspot
+- fast 模式下可复用 `last_result`
+- 组装响应并补充 `timing` 拆分字段
+
+### 7.8 WebSocket 协议与并行服务
+
+函数：`_ws_realtime_handler`
+
+- 二进制消息格式：`[4-byte header_len][header_json][jpeg_bytes]`
+- 解析 header 中的 `session_id` 与 `mode`
+- 复用与 HTTP 同样的推理/后处理逻辑
+
+启动逻辑：
+
+- 若 `websockets` 未安装：仅启用 HTTP
+- 否则并行启动 HTTP + WS（9001/9002）
+
 ---
 
-## 8. 数据契约要点（学习与联调重点）
+## 8. 数据契约要点
 
 预测核心字段：
 
@@ -743,24 +969,36 @@
 - 检查本地 /api/v1/remote-download 代理是否可访问
 - 检查远程导出目录写权限
 
-5. 上传中断或刷新页面后继续失败
+5. PDF 报告里显示 final.mp4
+
+- 检查前端导出 payload 是否携带原始 `source_filename`
+- 检查 `ResultDashboard` 是否从当前结果中继续向上抛原始文件名
+- 检查 `UploadWorkspace` 是否在历史详情场景回填 `source_filename`
+
+6. PDF 中时序图或热图与页面不一致
+
+- 检查前端是否传递了 `chart_data_url` 和 `heatmaps`
+- 检查页面上的时序图是否已更新到最新布局
+- 若导出图像过旧，重新执行一次推理后再导出
+
+7. 上传中断或刷新页面后继续失败
 
 - 检查浏览器 localStorage 的上传会话是否仍存在
 - 检查 /api/v1/upload-sessions/{session_id} 是否返回有效 uploaded_chunks
 - 若会话已失效，前端会自动创建新会话重新上传
 
-6. 实时推理 422
+8. 实时推理 422
 
 - 通常是后端未更新到 Form+File 的参数签名
 - 重启 uvicorn 并确认 `/api/v1/realtime/frame` 使用 multipart 提交
 
-7. 实时推理不可达
+9. 实时推理不可达
 
 - 检查 9001 远程服务是否启动
 - 检查 SSH 是否映射 9001
 - 检查 /api/v1/realtime/health 的 remote_realtime.reachable
 
-8. 导出的 PDF 视频名显示为 `final.mp4`
+10. 导出的 PDF 视频名显示为 `final.mp4`
 
 - 检查前端导出 payload 是否携带 `source_filename`。
 - 检查 `UploadWorkspace` 在推理成功与历史详情场景是否补齐 `source_filename`。
